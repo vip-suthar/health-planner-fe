@@ -1,0 +1,67 @@
+{
+  "kind": "collectionType",
+  "collectionName": "articles",
+  "info": {
+    "singularName": "article",
+    "pluralName": "articles",
+    "displayName": "Article",
+    "description": "Explore content: articles, recipes and guides surfaced on the Explore tab."
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title",
+      "required": true
+    },
+    "kind": {
+      "type": "enumeration",
+      "enum": ["article", "recipe", "guide", "community"],
+      "default": "article",
+      "required": true
+    },
+    "tone": {
+      "type": "enumeration",
+      "enum": ["forecast", "brand", "caution"],
+      "default": "forecast"
+    },
+    "excerpt": {
+      "type": "text"
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "category": {
+      "type": "string"
+    },
+    "readTime": {
+      "type": "string"
+    },
+    "authorName": {
+      "type": "string"
+    },
+    "authorRole": {
+      "type": "string"
+    },
+    "cover": {
+      "type": "media",
+      "multiple": false,
+      "required": false,
+      "allowedTypes": ["images"]
+    },
+    "featured": {
+      "type": "boolean",
+      "default": false
+    },
+    "takeaways": {
+      "type": "json"
+    }
+  }
+}

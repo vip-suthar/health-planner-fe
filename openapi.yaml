@@ -1,0 +1,2050 @@
+openapi: 3.0.3
+info:
+  title: Health Planner API
+  description: |
+    REST API for the Health Planner backend — passwordless/OTP auth via Cognito,
+    user profile & preferences, AI-generated single-day diet/activity plans,
+    intake logging with a daily nutrition ledger, pantry and shopping lists,
+    and medical history.
+
+    All responses share a common envelope:
+    `{ success, data?, error?, meta: { timestamp, requestId } }`.
+
+    Two runtimes serve these routes:
+
+    - Deployed: API Gateway REST API. `/auth/*` is public, `/data/{proxy+}` and
+      `/chats` sit behind a Cognito user-pool authorizer.
+    - Local: an Express bridge (`src/index.ts`) that mounts the same Lambda
+      handlers. It serves `/health`, `/auth/*` and `/data/*` only — `/health`
+      is Express-only and `/chats` is deployed-only.
+
+    Chat itself is a WebSocket API (`ws://<host>/ws/?token=<accessToken>`
+    locally, an API Gateway WebSocket API when deployed). Only the chat-history
+    read (`GET /chats`) is a REST route; the socket protocol is out of scope
+    for this document.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local development (Express bridge, `PORT` defaults to 8000)
+
+tags:
+  - name: Auth
+    description: Unified passwordless / password / social authentication
+  - name: User
+    description: Profile and preferences
+  - name: Plans
+    description: Single-day plan generation and retrieval
+  - name: Catalog
+    description: Meal / activity catalog items
+  - name: Intake & Ledger
+    description: Logging meals, activities, wellness and reading daily targets
+  - name: Pantry
+    description: Pantry contents and shopping list
+  - name: Medical
+    description: Medical history records
+  - name: Chat
+    description: Chat history (the live conversation runs over WebSocket)
+  - name: System
+    description: Service health
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Health check (Express bridge only — not exposed by API Gateway)
+      security: []
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  timestamp:
+                    type: string
+                    format: date-time
+                  version:
+                    type: string
+
+  # ---------------------------------------------------------------- Auth ----
+
+  /auth/start:
+    post:
+      tags: [Auth]
+      summary: Start sign-in (auto-provisions user, sends email OTP)
+      description: |
+        Looks up the user by email, creating (auto-provisioning) the account if
+        it does not exist, then initiates a Cognito USER_AUTH flow and selects
+        the EMAIL_OTP challenge. An OTP is emailed to the user; complete the
+        flow with `/auth/respond`.
+      security: []
+      operationId: authStart
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Challenge issued (OTP sent)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthChallengeResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/initiate:
+    post:
+      tags: [Auth]
+      summary: Initiate sign-in for an existing user
+      description: |
+        Starts a Cognito USER_AUTH flow. Optionally pre-selects a factor via
+        `preferredFactor`. For unknown emails the response is enumeration-safe:
+        it looks identical to a real challenge but the session is non-functional.
+      security: []
+      operationId: authInitiate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                preferredFactor:
+                  type: string
+                  enum: [EMAIL_OTP, PASSWORD]
+                  description: Optional factor to start with
+      responses:
+        "200":
+          description: Either tokens (if auth completed) or a next challenge
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AuthSuccessResponse"
+                  - $ref: "#/components/schemas/AuthChallengeResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/respond:
+    post:
+      tags: [Auth]
+      summary: Respond to an auth challenge (OTP code, password, or factor selection)
+      description: |
+        Behaviour by `challenge`:
+        - `PASSWORD`: `answer` (the password) is required.
+        - `EMAIL_OTP` with `answer`: submits the OTP code.
+        - `EMAIL_OTP` without `answer`: selects the email-OTP factor (Cognito
+          sends the code).
+      security: []
+      operationId: authRespond
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, session, challenge]
+              properties:
+                email:
+                  type: string
+                  format: email
+                session:
+                  type: string
+                  description: Opaque session from the previous challenge response
+                challenge:
+                  type: string
+                  enum: [PASSWORD, EMAIL_OTP]
+                answer:
+                  type: string
+                  description: Password or OTP code depending on `challenge`
+      responses:
+        "200":
+          description: Either tokens (auth complete) or a further challenge
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AuthSuccessResponse"
+                  - $ref: "#/components/schemas/AuthChallengeResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/social:
+    post:
+      tags: [Auth]
+      summary: Sign in with Google or Apple id_token
+      security: []
+      operationId: socialLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, idToken]
+              properties:
+                provider:
+                  type: string
+                  enum: [google, apple]
+                idToken:
+                  type: string
+                  description: Provider id_token from the native SDK
+                name:
+                  type: string
+                  maxLength: 50
+                  description: Optional display name (Apple only returns it on first sign-in)
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:
+                            $ref: "#/components/schemas/User"
+                          tokens:
+                            $ref: "#/components/schemas/AuthTokens"
+                          isNewUser:
+                            type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/token/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access tokens
+      description: |
+        Refresh-token rotation is enabled: a successful call returns fresh
+        tokens including a NEW refresh token, and invalidates the used one.
+      security: []
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "200":
+          description: New token set
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          tokens:
+                            $ref: "#/components/schemas/AuthTokens"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out (revokes the refresh token)
+      security: []
+      operationId: logout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/recover:
+    post:
+      tags: [Auth]
+      summary: Request a password reset code
+      description: Always responds 202 regardless of account existence (no enumeration).
+      security: []
+      operationId: forgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "202":
+          description: Reset code sent if the account exists
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          message:
+                            type: string
+                          nextStep:
+                            type: string
+                            example: recover/confirm
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /auth/recover/confirm:
+    post:
+      tags: [Auth]
+      summary: Confirm password reset with emailed code
+      security: []
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, newPassword]
+              properties:
+                email:
+                  type: string
+                  format: email
+                code:
+                  type: string
+                  minLength: 6
+                  maxLength: 6
+                  description: 6-digit code from the reset email
+                newPassword:
+                  type: string
+                  format: password
+                  minLength: 8
+                  maxLength: 256
+                  description: >
+                    Must include a lowercase letter, an uppercase letter, a
+                    number, and a special character (! @ # $ % ^ & *).
+      responses:
+        "200":
+          description: Password reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  # ---------------------------------------------------------------- User ----
+
+  /data/user:
+    get:
+      tags: [User]
+      summary: Get the current user (profile + identity)
+      description: |
+        Read-only merge of the stored profile and the Cognito identity.
+        `preferences` is stripped from the profile here — read it from
+        `/data/preferences`. Streak counters advance on intake logging, not on
+        this call.
+      operationId: getUser
+      responses:
+        "200":
+          description: Merged user profile and Cognito identity
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: "#/components/schemas/UserProfile"
+                          - $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      tags: [User]
+      summary: Update user attributes
+      operationId: updateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 50
+                gender:
+                  type: string
+                  enum: [male, female, other]
+                birthdate:
+                  type: string
+                  format: date
+                  description: Must be in the past
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /data/preferences:
+    get:
+      tags: [User]
+      summary: Get user preferences
+      operationId: getPreferences
+      responses:
+        "200":
+          description: Preferences (null-ish data if never set)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UserPreferences"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      tags: [User]
+      summary: Replace user preferences
+      operationId: updatePreferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPreferences"
+      responses:
+        "200":
+          description: Saved preferences
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UserPreferences"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  # --------------------------------------------------------------- Plans ----
+
+  /data/plans/today:
+    get:
+      tags: [Plans]
+      summary: Get today's plan (queues generation on first read of a new day)
+      description: |
+        Returns the hydrated plan view for the requested date (default today).
+
+        If no plan exists **for today**, generation is queued (SQS) and the
+        response is `202` — generation takes minutes, so it never runs inline.
+        Poll `/data/plan/status` or re-read this endpoint. If preferences are
+        not set yet, the response is `422` instead. For any other date with no
+        plan the response is `404`.
+      operationId: getPlanToday
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Day to fetch (YYYY-MM-DD). Defaults to today.
+      responses:
+        "200":
+          description: Hydrated plan view with per-task log status and ledger targets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/TodayPlanView"
+        "202":
+          description: No plan for today yet — generation queued or already running
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          status:
+                            type: string
+                            enum: [queued, processing]
+                          date:
+                            type: string
+                            format: date
+                          message:
+                            type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No plan exists for a past/future date (never generated on demand)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          description: Preferences not set, so a plan cannot be generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /data/plan/status:
+    get:
+      tags: [Plans]
+      summary: Get plan generation status for today
+      operationId: getPlanStatus
+      responses:
+        "200":
+          description: Current generation status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          planId:
+                            type: string
+                            nullable: true
+                          status:
+                            type: string
+                            nullable: true
+                            enum: [queued, processing, completed, failed, null]
+                          version:
+                            type: integer
+                            nullable: true
+                          date:
+                            type: string
+                            format: date
+                            nullable: true
+                          requestedAt:
+                            type: string
+                            format: date-time
+                            nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /data/plan/regen:
+    post:
+      tags: [Plans]
+      summary: Queue an asynchronous plan regeneration
+      description: |
+        Enqueues plan generation (SQS). Poll `/data/plan/status` or re-read
+        `/data/plans/today`. Returns 429 if a generation is already queued or
+        processing.
+      operationId: regenPlan
+      responses:
+        "202":
+          description: Regeneration queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          message:
+                            type: string
+                          status:
+                            type: string
+                            example: queued
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Preferences not set, so a plan cannot be generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          description: A generation is already queued or processing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /data/plan/history:
+    get:
+      tags: [Plans]
+      summary: List plan events (generation / adaptation audit trail)
+      operationId: getPlanHistory
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Filter events to a single plan day (also scopes `planId`)
+        - name: causeRef
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by causing event reference
+      responses:
+        "200":
+          description: Plan events; `meta.count` is the number of events returned
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          description: Plan event record
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /data/plan/day/{date}/resolve:
+    post:
+      tags: [Plans]
+      summary: Queue a re-resolve (adaptation) of a plan day
+      operationId: resolveDay
+      parameters:
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  default: manual-resolve
+      responses:
+        "202":
+          description: Re-resolve queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          date:
+                            type: string
+                            format: date
+                          status:
+                            type: string
+                            example: queued
+                          message:
+                            type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Missing or malformed `date` path param
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  # -------------------------------------------------------------- Catalog ---
+
+  /data/catalog/{id}:
+    get:
+      tags: [Catalog]
+      summary: Get a catalog item (meal recipe or activity)
+      operationId: getCatalogItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Catalog item
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/CatalogItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ------------------------------------------------------ Intake & Ledger ---
+
+  /data/intake:
+    post:
+      tags: [Intake & Ledger]
+      summary: Log a meal, activity, or wellness event
+      description: |
+        Idempotent via `eventId`: a duplicate submission returns
+        `{ duplicate: true, ledger }` without re-applying the intake.
+        Meal/activity logs update the day's ledger; every log also enqueues a
+        background day re-resolve (adaptation) which is a no-op if the day
+        still fits.
+      operationId: logIntake
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntakeLogRequest"
+      responses:
+        "200":
+          description: |
+            Logged (`{ logged: true, ledger }`) or a replay of a previous
+            `eventId` (`{ duplicate: true, ledger }`) — only one of the two
+            flags is present.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          logged:
+                            type: boolean
+                          duplicate:
+                            type: boolean
+                          ledger:
+                            $ref: "#/components/schemas/LedgerDay"
+        "400":
+          description: |
+            `INTAKE_FAILED` — the log could not be applied (e.g. an unknown
+            `refTaskId`). The message is user-actionable and safe to surface.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /data/ledger/today:
+    get:
+      tags: [Intake & Ledger]
+      summary: Get the day's ledger (targets vs consumed)
+      operationId: getLedgerToday
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Day to fetch (YYYY-MM-DD). Defaults to today.
+      responses:
+        "200":
+          description: |
+            The stored `LedgerDay`, or — when no ledger row exists for the day
+            yet — a zeroed placeholder with a different, flatter shape.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        oneOf:
+                          - $ref: "#/components/schemas/LedgerDay"
+                          - $ref: "#/components/schemas/EmptyLedgerDay"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /data/ledger/window:
+    get:
+      tags: [Intake & Ledger]
+      summary: Get a multi-day ledger window with gaps and calorie redistribution
+      operationId: getLedgerWindow
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 14
+          description: Number of days to include
+      responses:
+        "200":
+          description: Ledger window analysis
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          windowDays:
+                            type: integer
+                            description: Number of ledger days actually found (not the requested `days`)
+                          gaps:
+                            allOf:
+                              - $ref: "#/components/schemas/NutrientTotals"
+                            description: Sum of per-day `remaining` across the window
+                          balance:
+                            allOf:
+                              - $ref: "#/components/schemas/NutrientTotals"
+                            description: >
+                              Today's calorie target minus consumed. Only `calories` is
+                              meaningful; the other nutrients are always 0.
+                          redistribution:
+                            type: object
+                            description: >
+                              Today's calorie overage spread across the next 6 days,
+                              capped at 10% of the daily target and floored at 1200 kcal/day.
+                            properties:
+                              perDayReduction:
+                                type: number
+                              adjustedDailyTarget:
+                                type: number
+                              capped:
+                                type: boolean
+                          days:
+                            type: array
+                            items:
+                              allOf:
+                                - $ref: "#/components/schemas/LedgerDay"
+                                - type: object
+                                  properties:
+                                    remaining:
+                                      $ref: "#/components/schemas/NutrientTotals"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # --------------------------------------------------------------- Pantry ---
+
+  /data/pantry:
+    get:
+      tags: [Pantry]
+      summary: Get pantry contents
+      operationId: getPantry
+      responses:
+        "200":
+          description: Pantry
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Pantry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /data/pantry/confirm:
+    post:
+      tags: [Pantry]
+      summary: Confirm purchased items into the pantry (upsert)
+      operationId: confirmPantry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      ingredientId:
+                        type: string
+                        description: Defaults to a slug of `name` when omitted
+                      name:
+                        type: string
+                        minLength: 1
+                      qty:
+                        type: number
+                        minimum: 0
+                        default: 1
+                      unit:
+                        type: string
+                      expiresAt:
+                        type: string
+                        format: date-time
+      responses:
+        "200":
+          description: Updated pantry
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Pantry"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /data/shopping-list:
+    get:
+      tags: [Pantry]
+      summary: Get the shopping list for a plan day (needed minus pantry)
+      operationId: getShoppingList
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Plan day (YYYY-MM-DD). Defaults to today.
+      responses:
+        "200":
+          description: Shopping list diff
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          date:
+                            type: string
+                            format: date
+                          shoppingList:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ShoppingListItem"
+                          needed:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ShoppingListItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # -------------------------------------------------------------- Medical ---
+
+  /data/medical:
+    get:
+      tags: [Medical]
+      summary: List medical history items
+      operationId: getMedicalHistory
+      responses:
+        "200":
+          description: Medical history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/MedicalHistoryItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      tags: [Medical]
+      summary: Create a medical history item
+      operationId: createMedicalHistory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MedicalHistoryInput"
+      responses:
+        "200":
+          description: Created item
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MedicalHistoryItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /data/medical/{id}:
+    put:
+      tags: [Medical]
+      summary: Update a medical history item
+      operationId: updateMedicalHistory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MedicalHistoryUpdate"
+      responses:
+        "200":
+          description: Updated item
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/MedicalHistoryItem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Missing body or `id` path param, or invalid fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+    delete:
+      tags: [Medical]
+      summary: Delete a medical history item
+      operationId: deleteMedicalHistory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted (data is null)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "422":
+          description: Missing `id` path param
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ----------------------------------------------------------------- Chat ---
+
+  /chats:
+    get:
+      tags: [Chat]
+      summary: List the user's chat sessions with their messages
+      description: |
+        Deployed API only — the local Express bridge does not mount this route.
+        Newest session first. The live conversation runs over the WebSocket API;
+        this is the history read.
+      operationId: getChatHistory
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          description: >
+            Validated as a number against a raw string query param, so passing it
+            currently fails validation with 422. Omit it to get the default of 50.
+      responses:
+        "200":
+          description: Chat sessions, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Chat"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+# ============================================================== Components ==
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Cognito access token (`Authorization: Bearer <accessToken>`)"
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ValidationError:
+      description: "Request validation failed (`VALIDATION_ERROR`, HTTP 422)"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    ApiEnvelope:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          description: Payload; shape varies per endpoint
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+            requestId:
+              type: string
+
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+            details:
+              description: Optional extra error context (e.g. validation messages)
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+            requestId:
+              type: string
+
+    MessageResponse:
+      allOf:
+        - $ref: "#/components/schemas/ApiEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                message:
+                  type: string
+
+    AuthTokens:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        idToken:
+          type: string
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+        name:
+          type: string
+        gender:
+          type: string
+          enum: [male, female, other]
+        birthdate:
+          type: string
+          format: date
+
+    AuthSuccessResponse:
+      description: Authentication completed — user identity plus token set
+      allOf:
+        - $ref: "#/components/schemas/ApiEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user:
+                  $ref: "#/components/schemas/User"
+                tokens:
+                  $ref: "#/components/schemas/AuthTokens"
+
+    AuthChallengeResponse:
+      description: Another step is required to complete authentication
+      allOf:
+        - $ref: "#/components/schemas/ApiEnvelope"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                hasNextStep:
+                  type: boolean
+                  example: true
+                nextStep:
+                  type: string
+                  enum:
+                    [select-challenge, submit-otp, submit-password, respond-challenge]
+                challengeName:
+                  type: string
+                  example: EMAIL_OTP
+                session:
+                  type: string
+                  description: Pass back verbatim in `/auth/respond`
+                availableChallenges:
+                  type: array
+                  items:
+                    type: string
+                codeDelivery:
+                  type: object
+                  properties:
+                    medium:
+                      type: string
+                      example: EMAIL
+                    destination:
+                      type: string
+                      example: v***@e***
+
+    UserPreferences:
+      type: object
+      required: [goal, activity, pace, mealPrefs, metrices]
+      properties:
+        goal:
+          type: object
+          required: [type]
+          properties:
+            type:
+              type: string
+              enum: [lose, maintain, muscle, healthier, custom]
+            targetWeight:
+              type: number
+              description: kg, required when `type` is `lose`
+              minimum: 30
+              maximum: 300
+            customGoal:
+              type: string
+              description: Required when `type` is `custom`
+        activity:
+          type: string
+          enum: [sitting, light, active]
+        pace:
+          type: string
+          enum: [gentle, steady, ambitious]
+        mealPrefs:
+          type: object
+          required: [diet, cuisines, dislikes, meals, snacks, cooking]
+          properties:
+            diet:
+              type: string
+            cuisines:
+              type: array
+              items:
+                type: string
+            dislikes:
+              type: array
+              items:
+                type: string
+            meals:
+              type: integer
+            snacks:
+              type: integer
+            cooking:
+              type: string
+              enum: [quick, some_time, i_cook]
+        metrices:
+          type: object
+          required: [gender, age, height]
+          properties:
+            gender:
+              type: string
+              enum: [female, male, other]
+            age:
+              type: integer
+              minimum: 13
+              maximum: 100
+            height:
+              type: number
+              description: cm
+              minimum: 100
+              maximum: 230
+            weight:
+              type: number
+              description: kg, required when goal `type` is `lose`
+              minimum: 30
+              maximum: 300
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        height:
+          type: number
+        weight:
+          type: number
+        currentStreak:
+          type: integer
+        longestStreak:
+          type: integer
+        totalDaysCompleted:
+          type: integer
+        lastStreakDate:
+          type: string
+          format: date
+        lastPlanRequestedAt:
+          type: string
+          format: date-time
+        lastPlanStatus:
+          type: string
+          enum: [queued, processing, completed, failed]
+        shoppingCadenceDays:
+          type: integer
+        horizonDays:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Quantity:
+      type: object
+      required: [value, unit]
+      properties:
+        value:
+          type: number
+          minimum: 0
+        unit:
+          type: string
+          enum: [g, kg, ml, l, lb, inch, cm, m, feet, spoon, bowl, glass, jug]
+
+    Duration:
+      type: object
+      required: [value, unit]
+      properties:
+        value:
+          type: number
+          minimum: 0
+        unit:
+          type: string
+          enum: [sec, min, hour, day, month, year]
+
+    NutrientTotals:
+      type: object
+      properties:
+        calories:
+          type: number
+        protein:
+          type: number
+        carbs:
+          type: number
+        fat:
+          type: number
+        fiber:
+          type: number
+
+    NutritionInfo:
+      allOf:
+        - $ref: "#/components/schemas/NutrientTotals"
+        - type: object
+          properties:
+            sodium:
+              type: number
+            potassium:
+              type: number
+            iron:
+              type: number
+            calcium:
+              type: number
+            sugar:
+              type: number
+            satFat:
+              type: number
+
+    GuardrailResult:
+      type: object
+      properties:
+        passed:
+          type: boolean
+        warnings:
+          type: array
+          items:
+            type: string
+        disclaimers:
+          type: array
+          items:
+            type: string
+        riskLevel:
+          type: string
+          enum: [low, medium, high, critical]
+        medicalReviewRequired:
+          type: boolean
+
+    MealSlotRef:
+      type: object
+      properties:
+        refId:
+          type: string
+          description: Catalog item id for the meal
+        slot:
+          type: string
+          enum: [Breakfast, Lunch, Dinner, Snack]
+        time:
+          type: string
+          example: "08:00"
+        servings:
+          type: number
+
+    ActivitySlotRef:
+      type: object
+      properties:
+        refId:
+          type: string
+          description: Catalog item id for the activity
+        slot:
+          type: string
+        time:
+          type: string
+        duration:
+          type: number
+          description: Minutes
+
+    TaskLog:
+      type: object
+      description: Log status of a plan task
+      properties:
+        is_logged:
+          type: boolean
+        status:
+          type: string
+          enum: [pending, logged, skipped]
+        intake_event_id:
+          type: string
+        logged_at:
+          type: string
+          format: date-time
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        skip_reason:
+          type: string
+
+    TodayPlanView:
+      type: object
+      properties:
+        planId:
+          type: string
+        date:
+          type: string
+          format: date
+        version:
+          type: integer
+        status:
+          type: string
+        targets:
+          type: object
+          nullable: true
+          properties:
+            nutrition:
+              type: object
+              nullable: true
+              properties:
+                target:
+                  $ref: "#/components/schemas/NutrientTotals"
+                consumed:
+                  $ref: "#/components/schemas/NutrientTotals"
+                remaining:
+                  $ref: "#/components/schemas/NutrientTotals"
+            activity:
+              type: object
+              nullable: true
+              properties:
+                target:
+                  $ref: "#/components/schemas/Duration"
+                consumed:
+                  $ref: "#/components/schemas/Duration"
+            wellness:
+              type: object
+              nullable: true
+        meals:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/MealSlotRef"
+              - type: object
+                properties:
+                  name:
+                    type: string
+                    nullable: true
+                  description:
+                    type: string
+                    nullable: true
+                  nutrition:
+                    $ref: "#/components/schemas/NutritionInfo"
+                  ingredients:
+                    type: array
+                    items:
+                      type: string
+                  log:
+                    $ref: "#/components/schemas/TaskLog"
+        activities:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/ActivitySlotRef"
+              - type: object
+                properties:
+                  name:
+                    type: string
+                    nullable: true
+                  description:
+                    type: string
+                    nullable: true
+                  type:
+                    type: string
+                    nullable: true
+                  log:
+                    $ref: "#/components/schemas/TaskLog"
+        guardrailResult:
+          allOf:
+            - $ref: "#/components/schemas/GuardrailResult"
+          description: Null when no guardrail evaluation is attached
+        updatedAt:
+          type: string
+          format: date-time
+
+    CatalogItem:
+      type: object
+      required: [itemId, type, name]
+      properties:
+        itemId:
+          type: string
+        type:
+          type: string
+          enum: [meal, activity]
+        name:
+          type: string
+        description:
+          type: string
+        allergens:
+          type: array
+          items:
+            type: string
+        ingredients:
+          type: array
+          items:
+            type: object
+            properties:
+              ingredientId:
+                type: string
+              name:
+                type: string
+              qty:
+                type: number
+              unit:
+                type: string
+        nutrients:
+          $ref: "#/components/schemas/NutritionInfo"
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+        conditionFlags:
+          type: object
+          additionalProperties:
+            type: boolean
+        prepMinutes:
+          type: number
+        difficulty:
+          type: string
+          enum: [easy, medium, hard]
+        equipment:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+          enum: [generated, curated]
+        approvedBy:
+          type: string
+          nullable: true
+        createdBy:
+          type: string
+          nullable: true
+          description: >
+            Owner of a generated item. Curated items leave this null and are visible
+            to everyone; a generated item is only retrievable by the user it was
+            generated for.
+        createdAt:
+          type: string
+          format: date-time
+
+    IntakeLogRequest:
+      type: object
+      required: [eventId, type, data]
+      description: |
+        Discriminated by `type`. For meal/activity, `data` is either a
+        reference to a plan task (`refTaskId`) or a manual entry.
+      properties:
+        eventId:
+          type: string
+          description: Client-generated idempotency key
+        type:
+          type: string
+          enum: [meal, activity, wellness]
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        date:
+          type: string
+          format: date
+          description: Defaults to today
+        skipReason:
+          type: string
+          description: Present when the task was skipped instead of completed
+        data:
+          oneOf:
+            - title: Meal by plan reference
+              type: object
+              required: [refTaskId]
+              properties:
+                refTaskId:
+                  type: string
+                  description: e.g. `meal-<refId>` from today's plan
+                quantity:
+                  $ref: "#/components/schemas/Quantity"
+            - title: Meal manual entry
+              type: object
+              required: [mealType, name]
+              properties:
+                mealType:
+                  type: string
+                  enum: [breakfast, lunch, snack, dinner]
+                name:
+                  type: string
+                ingredients:
+                  type: array
+                  items:
+                    type: string
+                quantity:
+                  $ref: "#/components/schemas/Quantity"
+            - title: Activity by plan reference
+              type: object
+              required: [refTaskId]
+              properties:
+                refTaskId:
+                  type: string
+                duration:
+                  $ref: "#/components/schemas/Duration"
+            - title: Activity manual entry
+              type: object
+              required: [name, difficulty]
+              properties:
+                name:
+                  type: string
+                difficulty:
+                  type: string
+                  enum: [easy, medium, hard]
+                duration:
+                  $ref: "#/components/schemas/Duration"
+            - title: Wellness metric
+              type: object
+              required: [metric, value]
+              properties:
+                metric:
+                  type: string
+                  enum: [sleep, water, mood, energy, issue]
+                value:
+                  type: number
+                unit:
+                  type: string
+                note:
+                  type: string
+
+    LedgerDay:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        date:
+          type: string
+          format: date
+        nutrition:
+          type: object
+          properties:
+            target:
+              $ref: "#/components/schemas/NutrientTotals"
+            consumed:
+              $ref: "#/components/schemas/NutrientTotals"
+        activity:
+          type: object
+          properties:
+            target:
+              $ref: "#/components/schemas/Duration"
+            consumed:
+              $ref: "#/components/schemas/Duration"
+        wellness:
+          type: object
+          properties:
+            water:
+              type: object
+              properties:
+                target:
+                  $ref: "#/components/schemas/Quantity"
+                consumed:
+                  $ref: "#/components/schemas/Quantity"
+            sleep:
+              type: object
+              properties:
+                target:
+                  $ref: "#/components/schemas/Duration"
+                consumed:
+                  $ref: "#/components/schemas/Duration"
+            steps:
+              type: object
+              properties:
+                target:
+                  type: number
+                consumed:
+                  type: number
+            mindfulness:
+              type: object
+              properties:
+                target:
+                  $ref: "#/components/schemas/Duration"
+                consumed:
+                  $ref: "#/components/schemas/Duration"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    EmptyLedgerDay:
+      type: object
+      description: Placeholder returned by `/data/ledger/today` when no ledger row exists yet.
+      properties:
+        date:
+          type: string
+          format: date
+        targets:
+          $ref: "#/components/schemas/NutrientTotals"
+        consumed:
+          $ref: "#/components/schemas/NutrientTotals"
+        remaining:
+          $ref: "#/components/schemas/NutrientTotals"
+        activityBurnMinutes:
+          type: number
+          example: 0
+
+    PantryItem:
+      type: object
+      required: [ingredientId, name, qty]
+      properties:
+        ingredientId:
+          type: string
+        name:
+          type: string
+        qty:
+          type: number
+        unit:
+          type: string
+        boughtAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+
+    Pantry:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PantryItem"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ShoppingListItem:
+      type: object
+      required: [ingredientId, name, qty]
+      properties:
+        ingredientId:
+          type: string
+        name:
+          type: string
+        qty:
+          type: number
+        unit:
+          type: string
+
+    MedicalHistoryInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        severity:
+          type: string
+          enum: [low, medium, high]
+        type:
+          type: string
+          enum: [allergy, condition, medication]
+        duration:
+          type: string
+        medications:
+          type: array
+          items:
+            type: string
+        notes:
+          type: string
+
+    MedicalHistoryUpdate:
+      type: object
+      description: Same fields as `MedicalHistoryInput`, all optional.
+      properties:
+        name:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high]
+        type:
+          type: string
+          enum: [allergy, condition, medication]
+        duration:
+          type: string
+        medications:
+          type: array
+          items:
+            type: string
+        notes:
+          type: string
+
+    MedicalHistoryItem:
+      allOf:
+        - $ref: "#/components/schemas/MedicalHistoryInput"
+        - type: object
+          properties:
+            id:
+              type: string
+            userId:
+              type: string
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: string
+            suggestions:
+              type: array
+              description: Assistant/system messages only
+              items:
+                type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    Chat:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        context:
+          type: object
+          properties:
+            currentPlanId:
+              type: string
+            lastInteraction:
+              type: string
+            userPreferences:
+              description: Snapshot of preferences at session start
+            medicalHistory:
+              description: Snapshot of medical history at session start
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time

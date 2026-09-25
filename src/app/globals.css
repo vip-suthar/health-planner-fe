@@ -1,0 +1,196 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   NutriPlan design tokens — single source of truth.
+   Components reference these via Tailwind utilities (bg-brand,
+   text-ink, shadow-card, …); never hardcode hex in components.
+   ============================================================ */
+:root {
+  /* Brand / safe (green) */
+  --np-brand: #36795d;
+  --np-brand-deep: #2c6048;
+  --np-brand-surface: #e9f1ec;
+  --np-brand-border: #cfe2d7;
+
+  /* Provisional / forecast (blue) */
+  --np-forecast: #4a6c9b;
+  --np-forecast-surface: #ebf0f6;
+  --np-forecast-border: #dee6ef;
+  --np-forecast-dashed: #c9d6e5;
+  --np-forecast-bg: #fafbfc;
+  --np-forecast-text: #7e93b0;
+
+  /* Caution (amber) */
+  --np-caution: #a9762f;
+  --np-caution-surface: #f6eee0;
+  --np-caution-border: #e6d3b3;
+
+  /* Ink & text */
+  --np-ink: #1c2421;
+  --np-text-strong: #3a4540;
+  --np-text-body: #5d6661;
+  --np-text-muted: #8a928d;
+  --np-text-inactive: #9aa29d;
+
+  /* Surfaces & borders */
+  --np-surface: #ffffff;
+  --np-app-bg: #f6f7f7;
+  --np-surface-muted: #f1f4f2;
+  --np-canvas: #e4e7e5;
+  --np-hairline: #e7ebe9;
+  --np-border-strong: #d8deda;
+  --np-control-border: #dce2de;
+  --np-track: #edf0ee;
+
+  /* Accents */
+  --np-movement: #23473a;
+  --np-coach-surface: #f1f4f8;
+  --np-coach-text: #3c4651;
+  --np-danger: #ba1a1a;
+  --np-danger-surface: #fce8e6;
+
+  /* Elevation — soft, green-tinted, never gray */
+  --np-shadow-card: 0 6px 18px rgba(54, 121, 93, 0.1);
+  --np-shadow-card-soft: 0 6px 18px rgba(54, 121, 93, 0.06);
+  --np-shadow-lifted: 0 10px 22px rgba(54, 121, 93, 0.2);
+  --np-shadow-float: 0 18px 50px rgba(28, 46, 38, 0.18);
+  --np-shadow-fab: 0 10px 22px rgba(54, 121, 93, 0.34);
+  --np-shadow-fab-soft: 0 6px 16px rgba(30, 50, 40, 0.12);
+
+  /* Chrome metrics */
+  --np-topbar-h: 54px;
+  --np-bottomnav-h: 62px;
+
+  /* ---- shadcn aliases mapped to NutriPlan palette ---- */
+  --radius: 0.875rem; /* 14px card base */
+  --background: var(--np-app-bg);
+  --foreground: var(--np-ink);
+  --card: var(--np-surface);
+  --card-foreground: var(--np-ink);
+  --popover: var(--np-surface);
+  --popover-foreground: var(--np-ink);
+  --primary: var(--np-brand);
+  --primary-foreground: #ffffff;
+  --secondary: var(--np-surface-muted);
+  --secondary-foreground: var(--np-text-strong);
+  --muted: var(--np-surface-muted);
+  --muted-foreground: var(--np-text-muted);
+  --accent: var(--np-brand-surface);
+  --accent-foreground: var(--np-brand-deep);
+  --destructive: var(--np-danger);
+  --border: var(--np-hairline);
+  --input: var(--np-control-border);
+  --ring: var(--np-brand);
+  --chart-1: var(--np-brand);
+  --chart-2: var(--np-forecast);
+  --chart-3: var(--np-caution);
+  --chart-4: var(--np-brand-deep);
+  --chart-5: var(--np-text-muted);
+  --sidebar: var(--np-surface);
+  --sidebar-foreground: var(--np-ink);
+  --sidebar-primary: var(--np-brand);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--np-brand-surface);
+  --sidebar-accent-foreground: var(--np-brand-deep);
+  --sidebar-border: var(--np-hairline);
+  --sidebar-ring: var(--np-brand);
+}
+
+@theme inline {
+  /* fonts (vars set by next/font in layout) */
+  --font-sans: var(--font-hanken), system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+  --font-heading: var(--font-hanken), system-ui, sans-serif;
+
+  /* NutriPlan semantic colors → utilities (bg-brand, text-ink, …) */
+  --color-brand: var(--np-brand);
+  --color-brand-deep: var(--np-brand-deep);
+  --color-brand-surface: var(--np-brand-surface);
+  --color-brand-border: var(--np-brand-border);
+  --color-forecast: var(--np-forecast);
+  --color-forecast-surface: var(--np-forecast-surface);
+  --color-forecast-border: var(--np-forecast-border);
+  --color-forecast-dashed: var(--np-forecast-dashed);
+  --color-forecast-bg: var(--np-forecast-bg);
+  --color-forecast-text: var(--np-forecast-text);
+  --color-caution: var(--np-caution);
+  --color-caution-surface: var(--np-caution-surface);
+  --color-caution-border: var(--np-caution-border);
+  --color-ink: var(--np-ink);
+  --color-text-strong: var(--np-text-strong);
+  --color-text-body: var(--np-text-body);
+  --color-text-muted: var(--np-text-muted);
+  --color-text-inactive: var(--np-text-inactive);
+  --color-surface: var(--np-surface);
+  --color-app-bg: var(--np-app-bg);
+  --color-surface-muted: var(--np-surface-muted);
+  --color-canvas: var(--np-canvas);
+  --color-hairline: var(--np-hairline);
+  --color-border-strong: var(--np-border-strong);
+  --color-control-border: var(--np-control-border);
+  --color-track: var(--np-track);
+  --color-movement: var(--np-movement);
+  --color-coach-surface: var(--np-coach-surface);
+  --color-coach-text: var(--np-coach-text);
+  --color-danger: var(--np-danger);
+  --color-danger-surface: var(--np-danger-surface);
+
+  /* shadcn passthrough */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* radii */
+  --radius-sm: 0.375rem; /* 6 */
+  --radius-md: 0.625rem; /* 10 */
+  --radius-lg: 0.875rem; /* 14 */
+  --radius-xl: 1.25rem; /* 20 */
+  --radius-2xl: 1.5rem; /* 24 */
+  --radius-frame: 2.125rem; /* 34 */
+
+  /* elevation */
+  --shadow-card: var(--np-shadow-card);
+  --shadow-card-soft: var(--np-shadow-card-soft);
+  --shadow-lifted: var(--np-shadow-lifted);
+  --shadow-float: var(--np-shadow-float);
+  --shadow-fab: var(--np-shadow-fab);
+  --shadow-fab-soft: var(--np-shadow-fab-soft);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-canvas text-foreground antialiased;
+  }
+  /* hidden scrollbars for carousels / scroll regions */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
