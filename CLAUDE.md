@@ -30,7 +30,7 @@ forecast**, **amber = caution/flag**.
 ## Screens → routes
 Tabs: `/` Today (A1), `/plan` (B1), `/progress` (C1), `/explore` (C2), `/profile` (C3).
 Also: `/coach`, `/kitchen`, `/safety`, `/recipe`, `/activity`, `/article`,
-`/log/{meal,meal/free,meal/manual,water,weight,feel}`, `/welcome`, `/auth/{email,verify}`,
+`/welcome`, `/auth/{email,verify}`,
 `/onboarding/{preferences,safety}` (2-step cold start, Section H), `/plan/generating`.
 
 ## Commands

@@ -8,6 +8,7 @@ import type {
   MealNutrition,
   PantryItem as ApiPantryItem,
   ShoppingList,
+  TaskLog,
   TodayPlan,
 } from "@/lib/api/data";
 import type {
@@ -21,8 +22,9 @@ import type { PantryItem as ViewPantryItem } from "@/lib/data";
 const num = (v: unknown): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? v : undefined;
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+/** Local calendar date — toISOString() is UTC and flips the day near midnight. */
+function localISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function nutritionMeta(n?: MealNutrition): string | undefined {
@@ -46,7 +48,6 @@ function to24h(h: number, m: number, mer: string | null): number {
 interface TimeRange {
   startMin: number;
   endMin: number;
-  display: string; // short start, e.g. "08:00"
 }
 
 function parseTimeRange(time?: string): TimeRange | null {
@@ -58,17 +59,19 @@ function parseTimeRange(time?: string): TimeRange | null {
     const [h, m] = s.split(":").map(Number);
     return to24h(h, m, mer);
   };
-  const startMin = parse(nums[0]);
+  let startMin = parse(nums[0]);
   const endMin = nums[1] ? parse(nums[1]) : startMin;
-  return { startMin, endMin, display: nums[0] };
+  // One trailing meridiem covers both ends: "11:30 - 12:30 pm" starts in the am.
+  if (mer === "pm" && startMin > endMin) startMin -= 12 * 60;
+  return { startMin, endMin };
 }
 
-function statusFor(range: TimeRange | null, isToday: boolean): ItemStatus {
+function statusFor(range: TimeRange | null, isToday: boolean, now: Date): ItemStatus {
   // "done" means actually logged (tracked by the caller), never time-passed.
   // A past-but-unlogged item stays loggable ("upcoming").
   if (!isToday || !range) return "upcoming";
-  const now = new Date().getHours() * 60 + new Date().getMinutes();
-  if (now >= range.startMin && now < range.endMin) return "now";
+  const min = now.getHours() * 60 + now.getMinutes();
+  if (min >= range.startMin && min < range.endMin) return "now";
   return "upcoming";
 }
 
@@ -112,13 +115,25 @@ export function mapBudget(ledger?: Ledger): Budget | null {
 
 /* ---------- Today: plan day → timeline ---------- */
 
+function taskStatus(
+  log: TaskLog | undefined,
+  range: TimeRange | null,
+  isToday: boolean,
+  now: Date,
+): ItemStatus {
+  if (log?.status === "logged") return "done";
+  if (log?.status === "skipped") return "skipped";
+  return statusFor(range, isToday, now);
+}
+
 /**
  * Item ids are the plan-task refs (`meal-<refId>` / `activity-<refId>`) so a
  * log call can send them as `refTaskId` directly.
  */
-export function mapTimeline(plan: TodayPlan | null): TimelineItem[] | null {
+/** `now` drives the "now" highlight — pass a ticking clock to keep it live. */
+export function mapTimeline(plan: TodayPlan | null, now = new Date()): TimelineItem[] | null {
   if (!plan) return null;
-  const isToday = !plan.date || plan.date === todayISO();
+  const isToday = !plan.date || plan.date === localISO(now);
 
   const items = [
     ...(plan.meals ?? []).map((m, i) => {
@@ -127,14 +142,11 @@ export function mapTimeline(plan: TodayPlan | null): TimelineItem[] | null {
         sort: range?.startMin ?? 0,
         item: {
           id: m.refId ? `meal-${m.refId}` : `meal-${i}`,
-          time: range?.display ?? m.time ?? "",
+          time: m.time ?? "",
           kind: "meal" as const,
           label: (m.slot ?? "MEAL").toUpperCase(),
           title: m.name ?? "Meal",
-          status:
-            m.log?.status === "logged"
-              ? ("done" as const)
-              : statusFor(range, isToday),
+          status: taskStatus(m.log, range, isToday, now),
           meta: nutritionMeta(m.nutrition),
         },
       };
@@ -145,14 +157,11 @@ export function mapTimeline(plan: TodayPlan | null): TimelineItem[] | null {
         sort: range?.startMin ?? 0,
         item: {
           id: a.refId ? `activity-${a.refId}` : `activity-${i}`,
-          time: range?.display ?? a.time ?? "",
+          time: a.time ?? "",
           kind: "activity" as const,
           label: (a.type ?? a.slot ?? "MOVE").toUpperCase(),
           title: a.name ?? "Activity",
-          status:
-            a.log?.status === "logged"
-              ? ("done" as const)
-              : statusFor(range, isToday),
+          status: taskStatus(a.log, range, isToday, now),
           meta: a.duration ? `${a.duration} min` : undefined,
         },
       };

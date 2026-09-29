@@ -3,6 +3,7 @@
  *   1. /data/ledger/today returns either LedgerDay or the flat EmptyLedgerDay.
  *   2. /data/plans/today returns 200 (a plan) or 202 (generation queued) with
  *      bodies that are NOT distinguishable without the status code.
+ *   3. Plan task times are ranges with one trailing meridiem ("06:00 - 06:45 am").
  *
  * Run: node src/lib/mappers.check.mjs
  */
@@ -50,5 +51,26 @@ assert.equal(classify(200, ready).plan.planId, "p1");
 // The regression this guards: a 202 body also carries `status`, so a
 // body-only check would have called the queued placeholder a real plan.
 assert.notEqual(classify(202, queued).state, classify(200, ready).state);
+
+
+/* ---- 3. parseTimeRange: one trailing meridiem covers both ends ---- */
+// Mirrors parseTimeRange() in mappers.ts.
+function parseTimeRange(time) {
+  const mer = /pm/i.test(time) ? "pm" : /am/i.test(time) ? "am" : null;
+  const nums = time.match(/(\d{1,2}):(\d{2})/g);
+  const parse = (s) => {
+    const [h, m] = s.split(":").map(Number);
+    return ((mer ? h % 12 : h) + (mer === "pm" ? 12 : 0)) * 60 + m;
+  };
+  let startMin = parse(nums[0]);
+  const endMin = nums[1] ? parse(nums[1]) : startMin;
+  if (mer === "pm" && startMin > endMin) startMin -= 12 * 60;
+  return { startMin, endMin };
+}
+
+assert.deepEqual(parseTimeRange("06:00 - 06:45 am"), { startMin: 360, endMin: 405 }, "am range");
+assert.deepEqual(parseTimeRange("01:00 - 01:30 pm"), { startMin: 780, endMin: 810 }, "pm range");
+assert.deepEqual(parseTimeRange("11:30 - 12:30 pm"), { startMin: 690, endMin: 750 }, "range crossing noon");
+assert.deepEqual(parseTimeRange("13:00"), { startMin: 780, endMin: 780 }, "single 24h time");
 
 console.log("mappers.check: all assertions passed");

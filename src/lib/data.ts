@@ -1,6 +1,6 @@
 /* Mock domain data for NutriPlan screens. Shape-first; swap for API later. */
 
-export type ItemStatus = "done" | "now" | "upcoming" | "provisional";
+export type ItemStatus = "done" | "skipped" | "now" | "upcoming" | "provisional";
 export type MealKind = "breakfast" | "lunch" | "dinner" | "snack";
 export type MacroKey = "protein" | "carbs" | "fat";
 

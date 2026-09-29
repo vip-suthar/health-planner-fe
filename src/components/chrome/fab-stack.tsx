@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   Apple,
   Droplet,
@@ -18,6 +17,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { LogSheet, type LogTarget } from "@/components/np/log-sheet";
 import { useCoachUi } from "@/lib/coach/store";
 import { cn } from "@/lib/utils";
 
@@ -26,20 +26,20 @@ interface LogOption {
   label: string;
   hint: string;
   icon: LucideIcon;
-  href: string;
+  target: LogTarget;
 }
 
 const LOG_OPTIONS: LogOption[] = [
-  { key: "meal", label: "Log a meal", hint: "Pick, swap, or free-log", icon: Apple, href: "/log/meal" },
-  { key: "water", label: "Water", hint: "Add a glass", icon: Droplet, href: "/log/water" },
-  { key: "weight", label: "Weight", hint: "Today's reading", icon: Scale, href: "/log/weight" },
-  { key: "activity", label: "Activity", hint: "Movement & exercise", icon: Dumbbell, href: "/activity" },
-  { key: "feel", label: "How I feel", hint: "Energy, sleep, mood", icon: Smile, href: "/log/feel" },
+  { key: "meal", label: "Log a meal", hint: "Anything you ate", icon: Apple, target: { kind: "meal", mode: "custom" } },
+  { key: "water", label: "Water", hint: "Add a glass", icon: Droplet, target: { kind: "water" } },
+  { key: "weight", label: "Weight", hint: "Today's reading", icon: Scale, target: { kind: "weight" } },
+  { key: "activity", label: "Activity", hint: "Movement & exercise", icon: Dumbbell, target: { kind: "activity", mode: "custom" } },
+  { key: "feel", label: "How I feel", hint: "Energy & symptoms", icon: Smile, target: { kind: "feel" } },
 ];
 
 export function FabStack({ className }: { className?: string }) {
   const [open, setOpen] = useState(false);
-  const router = useRouter();
+  const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
   const openCoach = useCoachUi((s) => s.openCoach);
 
   return (
@@ -87,7 +87,7 @@ export function FabStack({ className }: { className?: string }) {
                   type="button"
                   onClick={() => {
                     setOpen(false);
-                    router.push(opt.href);
+                    setLogTarget(opt.target);
                   }}
                   className="flex items-center gap-3 rounded-[14px] border border-hairline bg-surface p-3 text-left active:scale-[0.99]"
                 >
@@ -108,6 +108,7 @@ export function FabStack({ className }: { className?: string }) {
           </div>
         </SheetContent>
       </Sheet>
+      <LogSheet target={logTarget} onClose={() => setLogTarget(null)} />
     </>
   );
 }

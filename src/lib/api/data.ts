@@ -262,7 +262,11 @@ export interface DurationValue {
 
 export type MealType = "breakfast" | "lunch" | "snack" | "dinner";
 
-/** `data` is discriminated by `type` (see openapi.yaml IntakeLogRequest). */
+/**
+ * `data` is discriminated by `type` (see openapi.yaml IntakeLogRequest).
+ * `refTaskId` on a manual entry marks it as replacing that plan task — not in
+ * the spec yet; the backend is adding it.
+ */
 export interface IntakeEvent {
   eventId: string;
   type: "meal" | "activity" | "wellness";
@@ -271,14 +275,25 @@ export interface IntakeEvent {
   skipReason?: string;
   data:
     | { refTaskId: string; quantity?: Quantity; duration?: DurationValue }
-    | { mealType: MealType; name: string; ingredients?: string[]; quantity?: Quantity }
-    | { name: string; difficulty: "easy" | "medium" | "hard"; duration?: DurationValue }
+    | {
+        mealType: MealType;
+        name: string;
+        ingredients?: string[];
+        quantity?: Quantity;
+        refTaskId?: string;
+      }
+    | {
+        name: string;
+        difficulty: "easy" | "medium" | "hard";
+        duration?: DurationValue;
+        refTaskId?: string;
+      }
     | { metric: WellnessMetric; value: number; unit?: string; note?: string };
 }
 
 /**
  * `weight` is NOT in the spec's wellness enum (sleep|water|mood|energy|issue) —
- * it is sent by /log/weight because no weight endpoint exists anywhere in the
+ * it is sent by the weight log sheet because no weight endpoint exists anywhere in the
  * API. The backend will reject it with 422 until the enum is widened.
  * ponytail: drop this member once a real weight route lands.
  */

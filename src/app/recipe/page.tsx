@@ -171,12 +171,6 @@ export default function RecipePage() {
           <Check className="size-4" strokeWidth={2.6} />
           Log it
         </button>
-        <button
-          onClick={() => router.push("/log/meal")}
-          className="flex h-[50px] items-center rounded-[15px] border border-control-border bg-surface px-[18px] font-sans text-[14px] font-semibold text-text-strong active:scale-[0.99]"
-        >
-          Swap
-        </button>
       </div>
     </div>
   );

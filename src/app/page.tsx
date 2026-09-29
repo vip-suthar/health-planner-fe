@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 import { format } from "date-fns";
 import { AppShell } from "@/components/chrome/app-shell";
 import { BudgetRing } from "@/components/np/budget-ring";
@@ -11,6 +10,7 @@ import { CoachNudge } from "@/components/np/coach-nudge";
 import { SectionHeader } from "@/components/np/section-header";
 import { Timeline, TimelineNode } from "@/components/np/timeline";
 import { TimelineCard } from "@/components/np/meal-card";
+import { LogSheet, type LogTarget } from "@/components/np/log-sheet";
 import { ContentCard } from "@/components/np/content-card";
 import { Skeleton } from "@/components/np/skeleton";
 import { Eyebrow, ScreenTitle } from "@/components/np/typography";
@@ -30,11 +30,7 @@ function greetingFor(date: Date, name: string) {
 export default function TodayPage() {
   const router = useRouter();
   const { date } = useDate();
-  const {
-    data: ledger,
-    isLoading: ledgerLoading,
-    mutate: refetchLedger,
-  } = useSWR("/data/ledger/today", () => dataApi.getLedgerToday());
+  const { data: ledger, isLoading: ledgerLoading } = useSWR("/data/ledger/today", () => dataApi.getLedgerToday());
   const {
     data: planState,
     isLoading: planLoading,
@@ -51,35 +47,16 @@ export default function TodayPage() {
       router.replace("/onboarding/preferences");
     }
   }, [planState, planError, router]);
-  // Items logged this session — drives the "Logged" card (not the clock).
-  const [logged, setLogged] = useState<Set<string>>(new Set());
-
-  async function logItem(item: (typeof timeline)[number]) {
-    // Real plan items carry a refTaskId as their id; mock fallback items don't.
-    const isRef = /^(meal|activity)-(?!\d+$)/.test(item.id);
-    try {
-      await dataApi.logIntake({
-        eventId: dataApi.newEventId(),
-        type: item.kind === "activity" ? "activity" : "meal",
-        data: isRef
-          ? { refTaskId: item.id }
-          : item.kind === "activity"
-            ? { name: item.title, difficulty: "easy" }
-            : { mealType: dataApi.mealTypeNow(), name: item.title },
-      });
-      setLogged((s) => new Set(s).add(item.id));
-      toast.success(`Logged ${item.title}`);
-      refetchLedger();
-    } catch {
-      toast.error("Could not log that — try again.");
-    }
-  }
+  // Items logged/skipped this session — drives the card state (not the clock).
+  const [logged, setLogged] = useState<Map<string, "done" | "skipped">>(new Map());
+  const [logTarget, setLogTarget] = useState<LogTarget | null>(null);
 
   const budget = mapBudget(ledger);
   const plan = planState?.state === "ready" ? planState.plan : null;
-  const timeline = (mapTimeline(plan) ?? timelineMock).map((it) =>
-    logged.has(it.id) ? { ...it, status: "done" as const } : it,
-  );
+  const timeline = (mapTimeline(plan, date) ?? timelineMock).map((it) => {
+    const status = logged.get(it.id);
+    return status ? { ...it, status } : it;
+  });
   const ringPercent = budget ? 1 - budget.kcalLeft / (budget.kcalGoal || 1) : 0;
 
   return (
@@ -150,15 +127,21 @@ export default function TodayPage() {
               <TimelineCard
                 item={item}
                 actions={{
-                  onLog: () => logItem(item),
-                  onSwap: () => router.push("/log/meal"),
-                  onSkip: () => toast("Skipped for today"),
+                  onLog: () => setLogTarget({ kind: item.kind, mode: "log", item }),
+                  onSkip: () => setLogTarget({ kind: item.kind, mode: "skip", item }),
                 }}
               />
             </TimelineNode>
           ))}
         </Timeline>
       )}
+      <LogSheet
+        target={logTarget}
+        onClose={() => setLogTarget(null)}
+        onLogged={(status, item) => {
+          if (item) setLogged((m) => new Map(m).set(item.id, status));
+        }}
+      />
 
       {/* for you */}
       <SectionHeader

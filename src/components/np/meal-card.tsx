@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Dumbbell } from "lucide-react";
+import { Check, Dumbbell, Utensils } from "lucide-react";
 import type { TimelineItem } from "@/lib/data";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "./status-badge";
@@ -30,30 +30,53 @@ function Eyebrow({
 
 export interface MealActions {
   onLog?: () => void;
-  onSwap?: () => void;
   onSkip?: () => void;
 }
 
-export function LoggedMealCard({ item }: { item: TimelineItem }) {
+/** Top-right MEAL / ACTIVITY tag so the two kinds read apart at a glance. */
+function KindBadge({ kind }: { kind: TimelineItem["kind"] }) {
+  const Icon = kind === "activity" ? Dumbbell : Utensils;
+  return (
+    <StatusBadge tone="neutral" className="ml-auto">
+      <Icon className="size-2.5" strokeWidth={2.2} />
+      {kind === "activity" ? "Activity" : "Meal"}
+    </StatusBadge>
+  );
+}
+
+export function LoggedCard({ item }: { item: TimelineItem }) {
+  const skipped = item.status === "skipped";
   return (
     <div className="rounded-[14px] border border-hairline bg-surface-muted px-3 py-2.5 opacity-80">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center gap-1.5">
         <Eyebrow>
           {item.time} · {item.label}
         </Eyebrow>
-        <span className="font-sans text-[10px] font-semibold text-brand">
-          Logged ✓
-        </span>
+        <KindBadge kind={item.kind} />
       </div>
-      <div className="mt-1.5 font-sans text-[14px] font-semibold leading-[1.2] text-[#4f5853] line-through decoration-[#bfc6c1]">
-        {item.title}
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <span
+          className={cn(
+            "font-sans text-[14px] font-semibold leading-[1.2] text-[#4f5853]",
+            !skipped && "line-through decoration-[#bfc6c1]",
+          )}
+        >
+          {item.title}
+        </span>
+        {skipped ? (
+          <span className="flex-none font-sans text-[10px] font-semibold text-text-muted">Skipped</span>
+        ) : (
+          <span className="flex-none font-sans text-[10px] font-semibold text-brand">
+            {item.kind === "activity" ? "Done ✓" : "Logged ✓"}
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
-/** Meal card with Log/Swap/Skip. `emphasis` highlights the current (now) meal. */
-export function MealActionCard({
+/** Meal/activity card with Log/Skip. `emphasis` highlights the current (now) item. */
+export function TaskCard({
   item,
   actions,
   emphasis,
@@ -76,6 +99,7 @@ export function MealActionCard({
           {item.time} · {item.label}
         </Eyebrow>
         {item.fromPantry && <StatusBadge tone="brand">FROM PANTRY</StatusBadge>}
+        <KindBadge kind={item.kind} />
       </div>
       <div className="mt-1.5 font-sans text-[15px] font-bold leading-[1.25] text-ink">
         {item.title}
@@ -85,13 +109,6 @@ export function MealActionCard({
         <Button onClick={actions?.onLog} className="h-9 flex-1 rounded-[10px] text-[13px]">
           <Check className="size-3.5" strokeWidth={2.6} />
           Log it
-        </Button>
-        <Button
-          variant="outline"
-          onClick={actions?.onSwap}
-          className="h-9 rounded-[10px] border-control-border text-[13px] text-text-strong"
-        >
-          Swap
         </Button>
         <Button
           variant="ghost"
@@ -105,60 +122,14 @@ export function MealActionCard({
   );
 }
 
-export function ActivityCard({
-  item,
-  actions,
-}: {
-  item: TimelineItem;
-  actions?: MealActions;
-}) {
-  const done = item.status === "done";
-  return (
-    <div
-      className={cn(
-        "rounded-[14px] border bg-surface px-3 py-2.5",
-        done ? "border-hairline bg-surface-muted opacity-80" : "border-hairline",
-      )}
-    >
-      <div className="flex items-center gap-2.5">
-        <Dumbbell className="size-[18px] text-[#5b7a8c]" strokeWidth={1.8} />
-        <div className="flex-1">
-          <Eyebrow>
-            {item.time} · {item.label}
-          </Eyebrow>
-          <div
-            className={cn(
-              "mt-0.5 font-sans text-[14px] font-bold leading-[1.2]",
-              done ? "text-[#4f5853] line-through decoration-[#bfc6c1]" : "text-ink",
-            )}
-          >
-            {item.title}
-          </div>
-          {item.meta && <MonoMeta className="mt-1 block">{item.meta}</MonoMeta>}
-        </div>
-        {done ? (
-          <span className="font-sans text-[10px] font-semibold text-brand">Done ✓</span>
-        ) : (
-          <Button
-            onClick={actions?.onLog}
-            className="h-8 rounded-[10px] px-3 text-[12.5px]"
-          >
-            <Check className="size-3.5" strokeWidth={2.6} />
-            Log
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function ProvisionalMealCard({ item }: { item: TimelineItem }) {
+export function ProvisionalCard({ item }: { item: TimelineItem }) {
   return (
     <div className="rounded-[14px] border-[1.5px] border-dashed border-forecast-dashed bg-forecast-bg px-3 py-2.5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center gap-1.5">
         <Eyebrow tone="forecast">
           {item.time} · {item.label}
         </Eyebrow>
+        <KindBadge kind={item.kind} />
         <StatusBadge tone="forecast">PROVISIONAL</StatusBadge>
       </div>
       <div className="mt-1.5 font-sans text-[14px] font-semibold leading-[1.2] text-[#54616e]">
@@ -176,8 +147,7 @@ export function TimelineCard({
   item: TimelineItem;
   actions?: MealActions;
 }) {
-  if (item.kind === "activity") return <ActivityCard item={item} actions={actions} />;
-  if (item.status === "done") return <LoggedMealCard item={item} />;
-  if (item.status === "provisional") return <ProvisionalMealCard item={item} />;
-  return <MealActionCard item={item} actions={actions} emphasis={item.status === "now"} />;
+  if (item.status === "done" || item.status === "skipped") return <LoggedCard item={item} />;
+  if (item.status === "provisional") return <ProvisionalCard item={item} />;
+  return <TaskCard item={item} actions={actions} emphasis={item.status === "now"} />;
 }
