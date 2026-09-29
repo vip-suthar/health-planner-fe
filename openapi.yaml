@@ -770,11 +770,42 @@ paths:
       tags: [Intake & Ledger]
       summary: Log a meal, activity, or wellness event
       description: |
-        Idempotent via `eventId`: a duplicate submission returns
-        `{ duplicate: true, ledger }` without re-applying the intake.
-        Meal/activity logs update the day's ledger; every log also enqueues a
-        background day re-resolve (adaptation) which is a no-op if the day
-        still fits.
+        **Idempotency.** `eventId` is unique per user. A repeat `eventId`
+        returns 200 `{ duplicate: true, ledger }` and applies nothing — even if
+        the body differs (first write wins). Never an error: the client
+        retries with the same id after network failures.
+
+        **Plan task, completed** (`isCustom: false`, no `skipReason`):
+          - `refTaskId` must exist in the plan for `date`, else 400 INTAKE_FAILED.
+          - Task log → `status: logged`, `is_logged: true`, `rating`,
+            `intake_event_id`, `logged_at`.
+          - Ledger += the planned item's nutrition (meal, scaled by `quantity`,
+            default one planned serving) or burn (activity, `duration` or the
+            planned duration).
+
+        **Plan task, skipped** (`isCustom: false` + `skipReason`):
+          - Task log → `status: skipped`, `skip_reason`, `intake_event_id`,
+            `logged_at`. `is_logged` stays false.
+          - Ledger unchanged.
+          - `rating` together with `skipReason` → 422.
+
+        **Custom entry** (`isCustom: true`):
+          - Recorded as its own intake; ledger += nutrition / burn estimated
+            from `name`, `ingredients`, `quantity` / `duration`.
+          - With `data.refTaskId`: that task's log → `status: logged`,
+            `intake_event_id` = this event. The planned item's own nutrition is
+            NOT added — the custom entry replaces it. Unknown ref → 400.
+          - `rating` / `skipReason` → 422.
+
+        **Already-resolved task.** A new `eventId` for a task whose status is
+        already `logged` or `skipped` → 400 INTAKE_FAILED ("already logged").
+
+        **Wellness**: `water` adds to the day's water consumed (glass = 250 ml);
+        `weight`, `energy`, `mood`, `sleep`, `issue` are recorded for the day.
+
+        Every applied log also enqueues a background day re-resolve
+        (adaptation), a no-op if the day still fits. After a successful log,
+        GET /data/plans/today must reflect the task's new `log`.
       operationId: logIntake
       requestBody:
         required: true
@@ -806,8 +837,9 @@ paths:
                             $ref: "#/components/schemas/LedgerDay"
         "400":
           description: |
-            `INTAKE_FAILED` — the log could not be applied (e.g. an unknown
-            `refTaskId`). The message is user-actionable and safe to surface.
+            `INTAKE_FAILED` — the log could not be applied: unknown
+            `refTaskId` for `date`, or the task is already logged/skipped.
+            The message is user-actionable and safe to surface.
           content:
             application/json:
               schema:
@@ -1459,7 +1491,7 @@ components:
           minimum: 0
         unit:
           type: string
-          enum: [g, kg, ml, l, lb, inch, cm, m, feet, spoon, bowl, glass, jug]
+          enum: [g, kg, ml, l, lb, inch, cm, m, feet, spoon, bowl, glass, jug, serving]
 
     Duration:
       type: object
@@ -1727,42 +1759,77 @@ components:
           type: string
           format: date-time
 
-    IntakeLogRequest:
+    IntakeCommon:
       type: object
-      required: [eventId, type, data]
-      description: |
-        Discriminated by `type`. For meal/activity, `data` is either a
-        reference to a plan task (`refTaskId`) or a manual entry.
+      required: [eventId]
       properties:
         eventId:
           type: string
-          description: Client-generated idempotency key
-        type:
+          minLength: 1
+          description: |
+            Client-generated idempotency key (UUID), unique per user. The client
+            reuses it when retrying the same log, so a replay must not re-apply.
+        date:
           type: string
-          enum: [meal, activity, wellness]
+          format: date
+          description: |
+            The user's LOCAL calendar date (YYYY-MM-DD) the log belongs to.
+            Defaults to "today" in the user's timezone — never the server's UTC
+            date. Part of the ledger partition key.
+
+    PlanTaskLogFields:
+      type: object
+      properties:
         rating:
           type: integer
           minimum: 1
           maximum: 5
-        date:
-          type: string
-          format: date
-          description: Defaults to today
+          description: Optional enjoyment rating for a completed plan task.
         skipReason:
           type: string
-          description: Present when the task was skipped instead of completed
-        data:
-          oneOf:
-            - title: Meal by plan reference
-              type: object
-              required: [refTaskId]
-              properties:
-                refTaskId:
-                  type: string
-                  description: e.g. `meal-<refId>` from today's plan
-                quantity:
-                  $ref: "#/components/schemas/Quantity"
-            - title: Meal manual entry
+          minLength: 1
+          description: |
+            Present ⇒ the plan task was SKIPPED, not completed. `skipped` when
+            the user gave no reason, else a snake_case slug (e.g. `not_hungry`,
+            `too_tired`). Must not be combined with `rating`.
+
+    MealPlanLog:
+      title: Meal — plan task (log or skip)
+      allOf:
+        - $ref: "#/components/schemas/IntakeCommon"
+        - $ref: "#/components/schemas/PlanTaskLogFields"
+        - type: object
+          required: [type, isCustom, refTaskId]
+          properties:
+            type:
+              type: string
+              enum: [meal]
+            isCustom:
+              type: boolean
+              enum: [false]
+            refTaskId:
+              type: string
+              minLength: 1
+              description: "`meal-<refId>` from today's plan"
+            quantity:
+              $ref: "#/components/schemas/Quantity"
+
+    MealCustomLog:
+      title: Meal — custom entry
+      allOf:
+        - $ref: "#/components/schemas/IntakeCommon"
+        - type: object
+          required: [type, isCustom, data]
+          properties:
+            type:
+              type: string
+              enum: [meal]
+            isCustom:
+              type: boolean
+              enum: [true]
+            quantity:
+              $ref: "#/components/schemas/Quantity"
+            data:
               type: object
               required: [mealType, name]
               properties:
@@ -1771,44 +1838,112 @@ components:
                   enum: [breakfast, lunch, snack, dinner]
                 name:
                   type: string
+                  minLength: 1
                 ingredients:
                   type: array
                   items:
                     type: string
-                quantity:
-                  $ref: "#/components/schemas/Quantity"
-            - title: Activity by plan reference
-              type: object
-              required: [refTaskId]
-              properties:
                 refTaskId:
                   type: string
-                duration:
-                  $ref: "#/components/schemas/Duration"
-            - title: Activity manual entry
+                  minLength: 1
+                  description: The plan task this entry replaces ("ate something else").
+
+    ActivityPlanLog:
+      title: Activity — plan task (log or skip)
+      allOf:
+        - $ref: "#/components/schemas/IntakeCommon"
+        - $ref: "#/components/schemas/PlanTaskLogFields"
+        - type: object
+          required: [type, isCustom, refTaskId]
+          properties:
+            type:
+              type: string
+              enum: [activity]
+            isCustom:
+              type: boolean
+              enum: [false]
+            refTaskId:
+              type: string
+              minLength: 1
+              description: "`activity-<refId>` from today's plan"
+            duration:
+              $ref: "#/components/schemas/Duration"
+
+    ActivityCustomLog:
+      title: Activity — custom entry
+      allOf:
+        - $ref: "#/components/schemas/IntakeCommon"
+        - type: object
+          required: [type, isCustom, data]
+          properties:
+            type:
+              type: string
+              enum: [activity]
+            isCustom:
+              type: boolean
+              enum: [true]
+            duration:
+              $ref: "#/components/schemas/Duration"
+            data:
               type: object
               required: [name, difficulty]
               properties:
                 name:
                   type: string
+                  minLength: 1
                 difficulty:
                   type: string
                   enum: [easy, medium, hard]
-                duration:
-                  $ref: "#/components/schemas/Duration"
-            - title: Wellness metric
+                refTaskId:
+                  type: string
+                  minLength: 1
+                  description: The plan task this entry replaces ("did something else").
+
+    WellnessLog:
+      title: Wellness metric
+      allOf:
+        - $ref: "#/components/schemas/IntakeCommon"
+        - type: object
+          required: [type, data]
+          properties:
+            type:
+              type: string
+              enum: [wellness]
+            data:
               type: object
               required: [metric, value]
               properties:
                 metric:
                   type: string
-                  enum: [sleep, water, mood, energy, issue]
+                  enum: [sleep, water, mood, energy, issue, weight]
                 value:
                   type: number
+                  description: |
+                    water → count of `unit` (client sends glasses, 250 ml each);
+                    weight → kg; energy / mood → 1–5; issue → 1 (the issue is `note`).
                 unit:
                   type: string
+                  description: "e.g. `glass` for water, `kg` for weight"
                 note:
                   type: string
+                  description: |
+                    For `issue`: snake_case slug — afternoon_slump, bloated,
+                    headache, hungry, cravings, well_rested.
+
+    IntakeLogRequest:
+      description: |
+        One of five shapes, selected by `type` and (for meal/activity)
+        `isCustom`:
+          - isCustom=false → a plan task, referenced by top-level `refTaskId`.
+          - isCustom=true  → a custom entry in `data`, optionally replacing
+                             the plan task in `data.refTaskId`.
+        `rating` / `skipReason` are accepted only on plan-task logs.
+      oneOf:
+        - $ref: "#/components/schemas/MealPlanLog"
+        - $ref: "#/components/schemas/MealCustomLog"
+        - $ref: "#/components/schemas/ActivityPlanLog"
+        - $ref: "#/components/schemas/ActivityCustomLog"
+        - $ref: "#/components/schemas/WellnessLog"
 
     LedgerDay:
       type: object

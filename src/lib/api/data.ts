@@ -262,41 +262,71 @@ export interface DurationValue {
 
 export type MealType = "breakfast" | "lunch" | "snack" | "dinner";
 
-/**
- * `data` is discriminated by `type` (see openapi.yaml IntakeLogRequest).
- * `refTaskId` on a manual entry marks it as replacing that plan task — not in
- * the spec yet; the backend is adding it.
- */
-export interface IntakeEvent {
-  eventId: string;
-  type: "meal" | "activity" | "wellness";
-  rating?: number;
-  date?: string; // defaults to today
-  skipReason?: string;
-  data:
-    | { refTaskId: string; quantity?: Quantity; duration?: DurationValue }
-    | {
-        mealType: MealType;
-        name: string;
-        ingredients?: string[];
-        quantity?: Quantity;
-        refTaskId?: string;
-      }
-    | {
-        name: string;
-        difficulty: "easy" | "medium" | "hard";
-        duration?: DurationValue;
-        refTaskId?: string;
-      }
-    | { metric: WellnessMetric; value: number; unit?: string; note?: string };
+/** Mirrors the backend intake request schema. */
+interface IntakeCommon {
+  eventId: string; // idempotency key
+  date?: string; // YYYY-MM-DD; default: today (server time)
+  rating?: number; // integer 1–5
+  review?: string; // free text — the skip reason on a skip
 }
 
-/**
- * `weight` is NOT in the spec's wellness enum (sleep|water|mood|energy|issue) —
- * it is sent by the weight log sheet because no weight endpoint exists anywhere in the
- * API. The backend will reject it with 422 until the enum is widened.
- * ponytail: drop this member once a real weight route lands.
- */
+export type IntakeQuantityUnit =
+  | "g" | "kg" | "ml" | "l" | "lb" | "inch" | "cm" | "m" | "feet"
+  | "spoon" | "bowl" | "glass" | "jug";
+
+/** `value` is a servings multiplier; 0 or missing → 1. */
+export interface IntakeQuantity {
+  value: number;
+  unit: IntakeQuantityUnit;
+}
+
+type IntakePlanMeal = IntakeCommon & {
+  type: "meal";
+  isCustom: false;
+  refTaskId: string; // "meal-<refId>", must exist in the plan for `date`
+  isSkipped?: boolean; // default false
+  quantity?: IntakeQuantity;
+};
+
+type IntakeCustomMeal = IntakeCommon & {
+  type: "meal";
+  isCustom: true;
+  quantity?: IntakeQuantity;
+  data: {
+    mealType: MealType;
+    name: string;
+    ingredients?: string[];
+    refTaskId?: string; // the plan task this replaces
+  };
+};
+
+type IntakePlanActivity = IntakeCommon & {
+  type: "activity";
+  isCustom: false;
+  refTaskId: string; // "activity-<refId>"
+  isSkipped?: boolean; // default false
+  duration?: DurationValue; // missing → planned duration
+};
+
+type IntakeCustomActivity = IntakeCommon & {
+  type: "activity";
+  isCustom: true;
+  duration?: DurationValue;
+  data: {
+    name: string;
+    difficulty: "easy" | "medium" | "hard";
+    refTaskId?: string; // the plan task this replaces
+  };
+};
+
+type IntakeWellness = IntakeCommon & {
+  type: "wellness";
+  data: { metric: WellnessMetric; value: number; unit?: string; note?: string };
+};
+
+/** POST /data/intake body. */
+export type IntakeEvent = IntakePlanMeal | IntakeCustomMeal | IntakePlanActivity | IntakeCustomActivity | IntakeWellness;
+
 export type WellnessMetric =
   | "sleep"
   | "water"

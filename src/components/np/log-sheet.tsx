@@ -68,8 +68,8 @@ const planRef = (item?: TimelineItem) =>
 
 /**
  * The single bottom sheet for every log: plan tasks (log / skip / replace),
- * custom meals & activities, water, weight, and how-I-feel. Rating / skip
- * reason ride on the one intake request (the API has no update route).
+ * custom meals & activities, water, weight, and how-I-feel. Rating / review
+ * ride on the one intake request (the API has no update route).
  */
 export function LogSheet({
   target,
@@ -242,25 +242,39 @@ function TaskBody({
   const refTaskId = planRef(item);
   const title = item?.title ?? (kind === "meal" ? "a meal" : "an activity");
 
-  function planData(): IntakeEvent["data"] {
-    if (refTaskId) return { refTaskId };
+  function planEvent(ref: string): IntakeEvent {
+    const fields =
+      mode === "skip"
+        ? { isSkipped: true, review: reason ?? undefined }
+        : { rating: rating === null ? undefined : rating + 1 };
     return kind === "activity"
-      ? { name: title, difficulty: "easy" }
-      : { mealType: dataApi.mealTypeNow(), name: title };
+      ? { eventId, type: "activity", isCustom: false, refTaskId: ref, ...fields }
+      : { eventId, type: "meal", isCustom: false, refTaskId: ref, ...fields };
   }
 
-  function customData(): IntakeEvent["data"] {
+  function customEvent(entryName: string): IntakeEvent {
     if (kind === "activity") {
-      return { name: name.trim(), difficulty, duration: { value: minutes, unit: "min" }, refTaskId };
+      return {
+        eventId,
+        type: "activity",
+        isCustom: true,
+        duration: { value: minutes, unit: "min" },
+        data: { name: entryName, difficulty, refTaskId },
+      };
     }
     const slot = item?.label.toLowerCase() as MealType | undefined;
     const list = ingredients.split(",").map((s) => s.trim()).filter(Boolean);
     return {
-      mealType: slot && MEAL_TYPES.includes(slot) ? slot : dataApi.mealTypeNow(),
-      name: name.trim(),
-      ingredients: list.length ? list : undefined,
-      quantity: { value: portion, unit: "serving" },
-      refTaskId,
+      eventId,
+      type: "meal",
+      isCustom: true,
+      quantity: { value: portion, unit: "bowl" }, // no plain "serving" unit; value is the multiplier
+      data: {
+        mealType: slot && MEAL_TYPES.includes(slot) ? slot : dataApi.mealTypeNow(),
+        name: entryName,
+        ingredients: list.length ? list : undefined,
+        refTaskId,
+      },
     };
   }
 
@@ -269,13 +283,17 @@ function TaskBody({
       toast.error(kind === "meal" ? "What did you eat?" : "What did you do?");
       return;
     }
-    await dataApi.logIntake(
-      mode === "log"
-        ? { eventId, type: kind, rating: rating === null ? undefined : rating + 1, data: planData() }
-        : mode === "skip"
-          ? { eventId, type: kind, skipReason: reason ? slug(reason) : "skipped", data: planData() }
-          : { eventId, type: kind, data: customData() },
-    );
+    // Mock fallback items have no plan ref: a log is recorded as a custom entry
+    // by title; a skip has nothing server-side to mark.
+    const event =
+      mode === "custom"
+        ? customEvent(name.trim())
+        : refTaskId
+          ? planEvent(refTaskId)
+          : mode === "log"
+            ? customEvent(title)
+            : null;
+    if (event) await dataApi.logIntake(event);
     toast.success(
       mode === "skip" ? "Skipped — thanks for telling us" : `Logged ${mode === "custom" ? name.trim() : title}`,
     );
@@ -355,7 +373,7 @@ function TaskBody({
                 <span className={rowLabelClass}>Portion</span>
                 <Stepper
                   size="sm"
-                  value={`${portion} serving${portion > 1 ? "s" : ""}`}
+                  value={`${portion} bowl${portion > 1 ? "s" : ""}`}
                   onChange={(d) => setPortion((p) => Math.max(1, p + d))}
                 />
               </div>
@@ -431,8 +449,6 @@ function WeightBody({ onDone }: { onDone: (status: Status) => void }) {
         await dataApi.logIntake({
           eventId,
           type: "wellness",
-          // `weight` is outside the spec's wellness metric enum — see
-          // WellnessMetric in lib/api/data.ts. Expect a 422 until the backend adds it.
           data: { metric: "weight", value: kg, unit: "kg" },
         });
         toast.success("Weigh-in saved");
