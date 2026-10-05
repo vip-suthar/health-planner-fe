@@ -14,7 +14,15 @@ import { LogSheet, type LogTarget } from "@/components/np/log-sheet";
 import { ContentCard } from "@/components/np/content-card";
 import { Skeleton } from "@/components/np/skeleton";
 import { Eyebrow, ScreenTitle } from "@/components/np/typography";
-import { coachNudge, forYou, timeline as timelineMock } from "@/lib/data";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { coachNudge, forYou } from "@/lib/data";
 import useSWR from "swr";
 import { useUser } from "@/lib/api/use-api";
 import { data as dataApi, ApiError } from "@/lib/api";
@@ -53,7 +61,7 @@ export default function TodayPage() {
 
   const budget = mapBudget(ledger);
   const plan = planState?.state === "ready" ? planState.plan : null;
-  const timeline = (mapTimeline(plan, date) ?? timelineMock).map((it) => {
+  const timeline = (mapTimeline(plan, date) ?? []).map((it) => {
     const status = logged.get(it.id);
     return status ? { ...it, status } : it;
   });
@@ -99,14 +107,49 @@ export default function TodayPage() {
         </div>
       ) : (
         budget && (
-          <div className="mb-4 flex items-center gap-4 rounded-xl border border-hairline bg-surface p-4">
-            <BudgetRing
-              value={budget.kcalLeft}
-              caption="KCAL LEFT"
-              percent={ringPercent}
-            />
-            <MacroBars macros={budget.macros} />
-          </div>
+          <Dialog>
+            <DialogTrigger
+              render={
+                <button
+                  type="button"
+                  className="mb-4 flex w-full items-center gap-4 rounded-xl border border-hairline bg-surface p-4 text-left"
+                />
+              }
+            >
+              <BudgetRing
+                value={budget.kcalLeft}
+                caption="KCAL LEFT"
+                percent={ringPercent}
+              />
+              <MacroBars macros={budget.macros} />
+            </DialogTrigger>
+            <DialogContent className="max-h-[85vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Today&apos;s nutrition</DialogTitle>
+                <DialogDescription>
+                  {budget.kcalGoal - budget.kcalLeft} of {budget.kcalGoal} kcal
+                  eaten · {budget.kcalLeft} left
+                </DialogDescription>
+              </DialogHeader>
+              <section className="space-y-2.5">
+                <Eyebrow>Macronutrients</Eyebrow>
+                <MacroBars macros={budget.macros} />
+              </section>
+              {/* TODO: micronutrients + extra details once the ledger exposes them */}
+              <section className="space-y-2.5">
+                <Eyebrow>Micronutrients</Eyebrow>
+                <p className="rounded-lg border border-dashed border-hairline p-3 text-text-muted">
+                  Coming soon
+                </p>
+              </section>
+              <section className="space-y-2.5">
+                <Eyebrow>More details</Eyebrow>
+                <p className="rounded-lg border border-dashed border-hairline p-3 text-text-muted">
+                  Coming soon
+                </p>
+              </section>
+            </DialogContent>
+          </Dialog>
         )
       )}
 

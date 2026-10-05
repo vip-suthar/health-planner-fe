@@ -2,6 +2,7 @@ import { API_BASE_URL } from "./config";
 import { ApiError } from "./errors";
 import {
   AuthTokens,
+  authHydrated,
   clearTokens,
   getBearerToken,
   getTokens,
@@ -145,6 +146,7 @@ export async function apiFetch<T = unknown>(
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   if (!noAuth) {
+    await authHydrated;
     // Proactively refresh an expired token to avoid a guaranteed 401 round-trip.
     let bearer = getBearerToken();
     if (!_retried && bearer && isTokenExpired(bearer) && getTokens()?.refreshToken) {

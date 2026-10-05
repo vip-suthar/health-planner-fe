@@ -1,18 +1,27 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useSWRConfig } from "swr";
-import { Check, PencilLine, Sparkles } from "lucide-react";
+import useSWR, { useSWRConfig } from "swr";
+import { Check, Loader2, PencilLine, RotateCcw, Sparkles, X } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { FlowCTA } from "@/components/chrome/flow-screen";
+import { ListGroup, ListRow } from "./list-row";
 import { ChoicePill } from "./selectable";
 import { Segmented } from "./segmented";
 import { Stepper } from "./stepper";
+import { Skeleton } from "./skeleton";
 import { Eyebrow } from "./typography";
 import type { TimelineItem } from "@/lib/data";
-import { data as dataApi } from "@/lib/api";
-import type { IntakeEvent, MealType } from "@/lib/api/data";
+import { data as dataApi, ApiError } from "@/lib/api";
+import {
+  CATALOG_SEARCH_MAX,
+  CATALOG_SEARCH_MIN,
+  type CatalogItem,
+  type CatalogSuggestion,
+  type IntakeEvent,
+  type MealType,
+} from "@/lib/api/data";
 import { cn } from "@/lib/utils";
 
 type TaskKind = "meal" | "activity";
@@ -230,10 +239,18 @@ function TaskBody({
   const [mode, setMode] = useState(target.mode);
   const [rating, setRating] = useState<number | null>(null);
   const [reason, setReason] = useState<string | null>(null);
-  // custom entry
+  // custom entry: search the catalog by name, pick a result or describe it freely
   const [name, setName] = useState("");
-  const [ingredients, setIngredients] = useState("");
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<CatalogSuggestion | null>(null);
+  const [freeform, setFreeform] = useState(false);
+  const [description, setDescription] = useState("");
   const [portion, setPortion] = useState(1);
+  // Replacing a plan slot keeps its meal type; otherwise guess from the clock.
+  const [mealType, setMealType] = useState<MealType>(() => {
+    const slot = item?.label.toLowerCase() as MealType | undefined;
+    return slot && MEAL_TYPES.includes(slot) ? slot : dataApi.mealTypeNow();
+  });
   const [minutes, setMinutes] = useState(30);
   const [difficulty, setDifficulty] = useState<(typeof DIFFICULTIES)[number]>("easy");
   // One id per sheet open — a retry after a failed request stays idempotent.
@@ -241,6 +258,38 @@ function TaskBody({
 
   const refTaskId = planRef(item);
   const title = item?.title ?? (kind === "meal" ? "a meal" : "an activity");
+
+  const typed = name.trim();
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(typed), 200);
+    return () => clearTimeout(t);
+  }, [typed]);
+  const active = mode === "custom" && !picked && !freeform;
+  // Each query is its own cache key, so a late response can never overwrite a
+  // newer query's results. 60s dedupe mirrors the endpoint's max-age=60.
+  const {
+    data: search,
+    error: searchError,
+    isLoading: searchLoading,
+    isValidating: searchValidating,
+    mutate: retrySearch,
+  } = useSWR(
+    active && query.length >= CATALOG_SEARCH_MIN ? ["/data/catalog/search", kind, query] : null,
+    () => dataApi.searchCatalog(query, kind),
+    { keepPreviousData: true, dedupingInterval: 60_000, shouldRetryOnError: false },
+  );
+  const open = active && typed.length >= CATALOG_SEARCH_MIN;
+  // Shown results belong to an older query: still debouncing, or no cache yet.
+  const stale = typed !== query || searchLoading;
+  const results = search?.items ?? [];
+  const failed = !!searchError && !stale;
+  const empty = open && !stale && !failed && results.length === 0;
+  const describing = freeform || empty;
+  // Full item (calories, difficulty) for the pick; the suggestion row is thin.
+  const { data: detail } = useSWR(picked ? `/data/catalog/${picked.itemId}` : null, () =>
+    dataApi.getCatalogItem(picked!.itemId),
+  );
+  const entryName = picked?.name ?? typed;
 
   function planEvent(ref: string): IntakeEvent {
     const fields =
@@ -252,42 +301,51 @@ function TaskBody({
       : { eventId, type: "meal", isCustom: false, refTaskId: ref, ...fields };
   }
 
-  function customEvent(entryName: string): IntakeEvent {
+  function customEvent(entryName: string, full?: CatalogItem): IntakeEvent {
     if (kind === "activity") {
       return {
         eventId,
         type: "activity",
         isCustom: true,
         duration: { value: minutes, unit: "min" },
-        data: { name: entryName, difficulty, refTaskId },
+        data: {
+          name: entryName,
+          description: (!picked && description.trim()) || undefined,
+          difficulty: full?.difficulty ?? picked?.difficulty ?? difficulty,
+          refTaskId: picked?.itemId ?? refTaskId,
+        },
       };
     }
-    const slot = item?.label.toLowerCase() as MealType | undefined;
-    const list = ingredients.split(",").map((s) => s.trim()).filter(Boolean);
     return {
       eventId,
       type: "meal",
       isCustom: true,
       quantity: { value: portion, unit: "bowl" }, // no plain "serving" unit; value is the multiplier
       data: {
-        mealType: slot && MEAL_TYPES.includes(slot) ? slot : dataApi.mealTypeNow(),
+        mealType,
         name: entryName,
-        ingredients: list.length ? list : undefined,
-        refTaskId,
+        description: (!picked && description.trim()) || undefined,
+        refTaskId: picked?.itemId ?? refTaskId,
       },
     };
   }
 
   async function submit() {
-    if (mode === "custom" && !name.trim()) {
+    if (mode === "custom" && !entryName) {
       toast.error(kind === "meal" ? "What did you eat?" : "What did you do?");
       return;
     }
+    // A picked activity needs a difficulty the row may not carry. Detail may
+    // still be in flight (or have failed) — one more try, then fall back.
+    const full =
+      mode === "custom" && kind === "activity" && picked && !picked.difficulty
+        ? (detail ?? (await dataApi.getCatalogItem(picked.itemId).catch(() => undefined)))
+        : undefined;
     // Mock fallback items have no plan ref: a log is recorded as a custom entry
     // by title; a skip has nothing server-side to mark.
     const event =
       mode === "custom"
-        ? customEvent(name.trim())
+        ? customEvent(entryName, full)
         : refTaskId
           ? planEvent(refTaskId)
           : mode === "log"
@@ -295,7 +353,7 @@ function TaskBody({
             : null;
     if (event) await dataApi.logIntake(event);
     toast.success(
-      mode === "skip" ? "Skipped — thanks for telling us" : `Logged ${mode === "custom" ? name.trim() : title}`,
+      mode === "skip" ? "Skipped — thanks for telling us" : `Logged ${mode === "custom" ? entryName : title}`,
     );
     onDone(mode === "skip" ? "skipped" : "done");
   }
@@ -351,25 +409,110 @@ function TaskBody({
 
       {mode === "custom" && (
         <>
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={kind === "meal" ? "e.g. Pad thai" : "e.g. 5k run"}
-            className={cn(inputClass, "mb-4")}
-          />
-          {kind === "meal" ? (
+          {picked ? (
+            <div className="mb-4 flex items-center gap-3 rounded-[13px] border-[1.5px] border-brand bg-brand-surface px-3.5 py-3">
+              <Check className="size-4 flex-none text-brand" strokeWidth={2.6} />
+              <span className="flex-1 font-sans text-[14px] font-semibold text-ink">{picked.name}</span>
+              <CatalogMeta
+                type={picked.type}
+                calories={picked.calories ?? detail?.nutrients?.calories}
+                difficulty={picked.difficulty ?? detail?.difficulty}
+              />
+              <button type="button" aria-label="Change" onClick={() => setPicked(null)}>
+                <X className="size-4 text-text-muted" strokeWidth={2.2} />
+              </button>
+            </div>
+          ) : (
+            <div className="relative mb-4">
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={CATALOG_SEARCH_MAX}
+                enterKeyHint="search"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-busy={open && (stale || searchValidating)}
+                placeholder={kind === "meal" ? "Search meals, e.g. Pad thai" : "Search activities, e.g. 5k run"}
+                className={cn(inputClass, "pr-10")}
+              />
+              {open && (stale || searchValidating) && (
+                <Loader2 className="absolute right-3.5 top-1/2 size-4 -translate-y-1/2 animate-spin text-text-inactive" />
+              )}
+            </div>
+          )}
+
+          {open && (failed || results.length > 0 || stale) && (
+            <ListGroup className={cn("mb-4 transition-opacity", stale && results.length > 0 && "opacity-60")}>
+              {failed ? (
+                <div role="status" className="flex items-center gap-3 px-3.5 py-3.5">
+                  <span className="flex-1 font-sans text-[13px] font-medium text-text-muted">
+                    {searchError instanceof ApiError && searchError.status === 0
+                      ? "You're offline — can't search right now."
+                      : "Search isn't available right now."}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => retrySearch()}
+                    className="flex items-center gap-1 font-sans text-[13px] font-semibold text-brand"
+                  >
+                    <RotateCcw className="size-3.5" strokeWidth={2.4} /> Retry
+                  </button>
+                </div>
+              ) : results.length > 0 ? (
+                results.map((r) => (
+                  <ListRow
+                    key={r.itemId}
+                    title={r.name}
+                    chevron={false}
+                    trailing={<CatalogMeta type={r.type} calories={r.calories} difficulty={r.difficulty} />}
+                    onClick={() => setPicked(r)}
+                  />
+                ))
+              ) : (
+                [0, 1, 2].map((i) => (
+                  <div key={i} className="flex items-center gap-3 px-3.5 py-3.5">
+                    <Skeleton className="h-4 flex-1" />
+                    <Skeleton className="h-3 w-12" />
+                  </div>
+                ))
+              )}
+              <ListRow
+                icon={<PencilLine className="size-4" strokeWidth={2} />}
+                title={`Log “${typed}” as something else`}
+                chevron={false}
+                onClick={() => setFreeform(true)}
+              />
+            </ListGroup>
+          )}
+
+          {empty && (
+            <p role="status" className="mb-3 font-sans text-[12.5px] font-medium text-text-muted">
+              No matches for “{query}” — describe it and we&apos;ll log it as is.
+            </p>
+          )}
+
+          {describing && (
             <>
               <Eyebrow className="mb-2 block">
-                Ingredients <Optional />
+                Description <Optional />
               </Eyebrow>
-              <input
-                value={ingredients}
-                onChange={(e) => setIngredients(e.target.value)}
-                placeholder="Comma-separated — helps us estimate"
-                className={cn(inputClass, "mb-4")}
+              <textarea
+                rows={2}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={
+                  kind === "meal" ? "What was in it? Helps us estimate" : "Anything worth noting?"
+                }
+                className={cn(inputClass, "mb-4 h-auto resize-none py-3")}
               />
-              <div className={cn(rowClass, "mb-5")}>
+            </>
+          )}
+
+          {!(picked || describing) ? null : kind === "meal" ? (
+            <div className="mb-5 grid grid-cols-2 gap-2">
+              <div className={cn(rowClass, "flex-col items-start gap-1.5 py-2.5")}>
                 <span className={rowLabelClass}>Portion</span>
                 <Stepper
                   size="sm"
@@ -377,10 +520,24 @@ function TaskBody({
                   onChange={(d) => setPortion((p) => Math.max(1, p + d))}
                 />
               </div>
-            </>
+              <label className={cn(rowClass, "flex-col items-start gap-1.5 py-2.5")}>
+                <span className={rowLabelClass}>Meal</span>
+                <select
+                  value={mealType}
+                  onChange={(e) => setMealType(e.target.value as MealType)}
+                  className="h-6.5 w-full rounded-lg border border-control-border bg-surface px-2 font-sans text-[13px] font-bold text-ink outline-none focus:border-brand"
+                >
+                  {MEAL_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t[0].toUpperCase() + t.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           ) : (
             <>
-              <div className={cn(rowClass, "mb-4")}>
+              <div className={cn(rowClass, picked ? "mb-5" : "mb-4")}>
                 <span className={rowLabelClass}>Duration</span>
                 <Stepper
                   size="sm"
@@ -388,19 +545,28 @@ function TaskBody({
                   onChange={(d) => setMinutes((m) => Math.max(5, m + d * 5))}
                 />
               </div>
-              <Eyebrow className="mb-2 block">Effort</Eyebrow>
-              <Segmented
-                className="mb-5"
-                value={difficulty}
-                onChange={(k) => setDifficulty(k as (typeof DIFFICULTIES)[number])}
-                options={DIFFICULTIES.map((d) => ({ key: d, label: d[0].toUpperCase() + d.slice(1) }))}
-              />
+              {!picked && (
+                <>
+                  <Eyebrow className="mb-2 block">Effort</Eyebrow>
+                  <Segmented
+                    className="mb-5"
+                    value={difficulty}
+                    onChange={(k) => setDifficulty(k as (typeof DIFFICULTIES)[number])}
+                    options={DIFFICULTIES.map((d) => ({ key: d, label: d[0].toUpperCase() + d.slice(1) }))}
+                  />
+                </>
+              )}
             </>
           )}
         </>
       )}
     </Frame>
   );
+}
+
+function CatalogMeta({ type, calories, difficulty }: Pick<CatalogSuggestion, "type" | "calories" | "difficulty">) {
+  const meta = type === "meal" ? calories != null && `${calories} kcal` : difficulty;
+  return meta ? <span className="font-mono text-[11px] text-text-inactive">{meta}</span> : null;
 }
 
 /* ---------- wellness ---------- */

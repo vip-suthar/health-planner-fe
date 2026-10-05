@@ -110,6 +110,20 @@ export const useAuthStore = create<AuthState>()(
 // The API client and JWT helpers run outside React; they read/write the store
 // through these functions so there is a single source of truth.
 
+/**
+ * Resolves once persisted tokens are loaded. Authed requests await this so a
+ * fetch fired on mount (before AuthProvider's effect) doesn't go out tokenless.
+ */
+export const authHydrated = new Promise<void>((resolve) => {
+  if (useAuthStore.getState().hydrated) return resolve();
+  const unsub = useAuthStore.subscribe((s) => {
+    if (s.hydrated) {
+      unsub();
+      resolve();
+    }
+  });
+});
+
 export function getTokens(): AuthTokens | null {
   return useAuthStore.getState().tokens;
 }

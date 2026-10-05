@@ -253,6 +253,44 @@ export function getCatalogItem(id: string) {
   return apiFetch<CatalogItem>(`/data/catalog/${encodeURIComponent(id)}`);
 }
 
+/** Typeahead row — only what a dropdown shows. Fetch the full item on select. */
+export interface CatalogSuggestion {
+  itemId: string;
+  name: string;
+  type: "meal" | "activity";
+  calories?: number;
+  difficulty?: "easy" | "medium" | "hard";
+}
+
+export interface CatalogSearchResult {
+  /** The `q` these results answer. */
+  query: string;
+  items: CatalogSuggestion[];
+}
+
+/** Server ignores queries under this length (after trim). */
+export const CATALOG_SEARCH_MIN = 2;
+/** Server 422s above this length. */
+export const CATALOG_SEARCH_MAX = 64;
+
+/**
+ * GET /data/catalog/search — typeahead over catalog names. Short queries
+ * resolve empty without a request; long ones are clamped instead of 422ing.
+ */
+export async function searchCatalog(
+  q: string,
+  type?: "meal" | "activity",
+): Promise<CatalogSearchResult> {
+  const query = q.trim().slice(0, CATALOG_SEARCH_MAX);
+  if (query.length < CATALOG_SEARCH_MIN) return { query, items: [] };
+  const params = new URLSearchParams({ q: query });
+  if (type) params.set("type", type);
+  const res = await apiFetch<Partial<CatalogSearchResult> | null>(
+    `/data/catalog/search?${params}`,
+  );
+  return { query: res?.query ?? query, items: res?.items ?? [] };
+}
+
 /* ---------- Intake & ledger (Stage G) ---------- */
 
 export interface DurationValue {
@@ -295,8 +333,8 @@ type IntakeCustomMeal = IntakeCommon & {
   data: {
     mealType: MealType;
     name: string;
-    ingredients?: string[];
-    refTaskId?: string; // the plan task this replaces
+    description?: string; // free text when not picked from the catalog
+    refTaskId?: string; // picked catalog itemId, else the plan task this replaces
   };
 };
 
@@ -314,8 +352,9 @@ type IntakeCustomActivity = IntakeCommon & {
   duration?: DurationValue;
   data: {
     name: string;
+    description?: string; // free text when not picked from the catalog
     difficulty: "easy" | "medium" | "hard";
-    refTaskId?: string; // the plan task this replaces
+    refTaskId?: string; // picked catalog itemId, else the plan task this replaces
   };
 };
 
