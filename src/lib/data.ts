@@ -212,35 +212,8 @@ export interface BarStat {
   label: string;
   pct: number;
   value: string;
-  tone: "brand" | "caution";
+  tone: "brand" | "caution" | "neutral";
 }
-
-export const trajectory = {
-  caption: "GOAL TRAJECTORY · WEIGHT",
-  headline: "3 weeks in — trending to goal by mid-August",
-  start: "START 78.0kg",
-  now: "NOW 76.3kg",
-  goal: "GOAL 73kg",
-  // polyline points (viewBox 0 0 320 96)
-  line: "0,26 46,30 92,28 138,38 184,44 230,52 276,58 320,66",
-  marker: { x: 276, y: 58 },
-};
-
-export const adherence: BarStat[] = [
-  { label: "Dinners", pct: 80, value: "80%", tone: "brand" },
-  { label: "Morning workouts", pct: 50, value: "50%", tone: "caution" },
-];
-
-export const adherenceNote =
-  "Mornings are tough for you — **so we moved workouts to evenings.** No streak shaming here.";
-
-export const nutrientBalance: (BarStat & { status: string })[] = [
-  { label: "Protein", pct: 92, value: "met", status: "met", tone: "brand" },
-  { label: "Fiber", pct: 78, value: "met", status: "met", tone: "brand" },
-  { label: "Iron", pct: 44, value: "low", status: "low", tone: "caution" },
-];
-
-export const nutrientNote = "Iron's run low — this week leans on leafy greens.";
 
 export const adaptationLog = [
   {

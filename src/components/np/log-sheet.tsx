@@ -58,6 +58,14 @@ const ENERGY = [
   { emoji: "⚡", label: "Great" },
 ];
 
+const MOOD = [
+  { emoji: "😞", label: "Low" },
+  { emoji: "😕", label: "Meh" },
+  { emoji: "🙂", label: "Okay" },
+  { emoji: "😊", label: "Good" },
+  { emoji: "😄", label: "Great" },
+];
+
 const SYMPTOMS = ["Afternoon slump", "Bloated", "Headache", "Hungry", "Cravings", "Well-rested"];
 
 const MEAL_TYPES: MealType[] = ["breakfast", "lunch", "snack", "dinner"];
@@ -97,6 +105,7 @@ export function LogSheet({
   function done(status: Status) {
     onLogged?.(status, shown && "item" in shown ? shown.item : undefined);
     mutate("/data/ledger/today");
+    mutate((key) => typeof key === "string" && key.startsWith("/data/progress"));
     onClose();
   }
 
@@ -638,6 +647,7 @@ function WeightBody({ onDone }: { onDone: (status: Status) => void }) {
 }
 
 function FeelBody({ onDone }: { onDone: (status: Status) => void }) {
+  const [mood, setMood] = useState<number | null>(null);
   const [energy, setEnergy] = useState<number | null>(2);
   const [symptoms, setSymptoms] = useState<string[]>([]);
   // Stable id per event so a retry after a partial failure doesn't double-log.
@@ -652,6 +662,7 @@ function FeelBody({ onDone }: { onDone: (status: Status) => void }) {
       cta="Save"
       onSubmit={async () => {
         const events = [
+          ...(mood === null ? [] : [{ metric: "mood" as const, value: mood + 1 }]),
           ...(energy === null ? [] : [{ metric: "energy" as const, value: energy + 1 }]),
           ...symptoms.map((s) => ({ metric: "issue" as const, value: 1, note: slug(s) })),
         ];
@@ -672,6 +683,11 @@ function FeelBody({ onDone }: { onDone: (status: Status) => void }) {
         onDone("done");
       }}
     >
+      <Eyebrow className="mb-3 block">
+        Mood <Optional />
+      </Eyebrow>
+      <EmojiScale options={MOOD} value={mood} onChange={setMood} />
+
       <Eyebrow className="mb-3 block">Energy</Eyebrow>
       <EmojiScale options={ENERGY} value={energy} onChange={setEnergy} />
 

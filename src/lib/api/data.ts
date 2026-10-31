@@ -433,6 +433,71 @@ export function getLedgerWindow(days?: number) {
   );
 }
 
+/* ---------- Progress ---------- */
+
+export type NutrientTotals = {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number;
+};
+
+/** `null` means not logged — never zero. */
+export type ProgressMetric = { value: number; target: number | null } | null;
+
+export interface Progress {
+  range: { from: string; to: string; days: number };
+  goal: {
+    type: "lose" | "maintain" | "muscle" | "healthier" | "custom" | null;
+    pace: "gentle" | "steady" | "ambitious" | null;
+    startedAt: string | null;
+    startWeight: number | null;
+    currentWeight: number | null; // smoothed trend, kg
+    targetWeight: number | null;
+    changeKg: number | null; // current - start
+    remainingKg: number | null; // target - current
+    weeklyRateKg: number | null;
+    weeklyRatePercent: number | null;
+    etaDate: string | null; // YYYY-MM-DD
+    weighIns: number;
+    ready: boolean; // enough weigh-ins for rate/ETA
+  };
+  consistency: { daysLogged: number; days: number; currentStreak: number; longestStreak: number };
+  adherence: Record<
+    "meals" | "activities",
+    { planned: number; logged: number; skipped: number; rate: number | null }
+  >;
+  nutrition: { daysLogged: number; average: NutrientTotals | null; target: NutrientTotals | null };
+  activity: {
+    daysLogged: number;
+    totalMinutes: number;
+    weeklyMinutes: number;
+    weeklyTargetMinutes: number | null;
+  };
+  sleep: { nightsLogged: number; averageHours: number | null; nightsOnTarget: number };
+  water: { daysLogged: number; averageMl: number | null; daysOnTarget: number };
+  mood: { entries: number; average: number | null }; // 1–5
+  energy: { entries: number; average: number | null }; // 1–5
+  daily: {
+    date: string;
+    logged: boolean;
+    nutrition: { consumed: NutrientTotals; target: NutrientTotals | null } | null;
+    activityMinutes: ProgressMetric;
+    sleepHours: ProgressMetric;
+    waterMl: ProgressMetric;
+    mood: number | null;
+    energy: number | null;
+    weight: number | null; // raw weigh-in
+    weightTrend: number | null; // smoothed, weigh-in days only
+  }[];
+}
+
+/** GET /data/progress — `days` 7–90, range ends today (server time). */
+export function getProgress(days = 30) {
+  return apiFetch<Progress>(`/data/progress?days=${days}`);
+}
+
 /* ---------- Pantry & shopping (Stage H) ---------- */
 
 export interface PantryItem {

@@ -12,8 +12,8 @@ export function StatBar({
   inline?: boolean;
   className?: string;
 }) {
-  const fill = stat.tone === "brand" ? "bg-brand" : "bg-caution";
-  const valueColor = stat.tone === "brand" ? "text-brand" : "text-caution";
+  const fill = { brand: "bg-brand", caution: "bg-caution", neutral: "bg-text-inactive" }[stat.tone];
+  const valueColor = { brand: "text-brand", caution: "text-caution", neutral: "text-text-body" }[stat.tone];
 
   if (inline) {
     return (

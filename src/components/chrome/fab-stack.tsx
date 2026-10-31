@@ -34,7 +34,7 @@ const LOG_OPTIONS: LogOption[] = [
   { key: "water", label: "Water", hint: "Add a glass", icon: Droplet, target: { kind: "water" } },
   { key: "weight", label: "Weight", hint: "Today's reading", icon: Scale, target: { kind: "weight" } },
   { key: "activity", label: "Activity", hint: "Movement & exercise", icon: Dumbbell, target: { kind: "activity", mode: "custom" } },
-  { key: "feel", label: "How I feel", hint: "Energy & symptoms", icon: Smile, target: { kind: "feel" } },
+  { key: "feel", label: "How I feel", hint: "Mood, energy & symptoms", icon: Smile, target: { kind: "feel" } },
 ];
 
 export function FabStack({ className }: { className?: string }) {
