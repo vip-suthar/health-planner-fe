@@ -11,6 +11,7 @@ const statusBadge = cva(
         forecast: "bg-forecast-surface text-forecast",
         caution: "bg-caution-surface text-caution border border-caution-border",
         neutral: "bg-surface-muted text-text-muted",
+        danger: "bg-danger-surface text-danger",
       },
       size: {
         sm: "text-[9px] px-1.5 py-[3px]",

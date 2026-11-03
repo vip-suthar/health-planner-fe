@@ -124,6 +124,7 @@ export interface PlanMeal {
   nutrition?: MealNutrition;
   ingredients?: string[];
   log?: TaskLog;
+  readiness?: { ready: boolean; missing: string[] };
 }
 
 export interface PlanActivity {
@@ -498,53 +499,106 @@ export function getProgress(days = 30) {
   return apiFetch<Progress>(`/data/progress?days=${days}`);
 }
 
-/* ---------- Pantry & shopping (Stage H) ---------- */
+/* ---------- Kitchen & shopping ---------- */
 
-export interface PantryItem {
-  ingredientId?: string;
+export type StockLevel = "plenty" | "some" | "low" | "out";
+export type Storage = "fridge" | "freezer" | "pantry";
+export type StapleStatus = "ok" | "low" | "out";
+
+/** Has either `qty` (+ optional `unit`) or `level`, never both. */
+export interface KitchenItem {
+  id: string;
+  ingredientId: string;
+  name: string;
+  category: string;
+  tier?: string;
+  storage: Storage;
+  qty?: number;
+  unit?: string;
+  level?: StockLevel;
+  dateType?: "use_by" | "best_before" | null;
+  expiresOn?: string | null; // YYYY-MM-DD
+  addedAt?: string;
+  freshness: "fresh" | "use_soon" | "expired";
+  daysLeft: number | null;
+}
+
+export interface Staple {
+  ingredientId: string;
+  name: string;
+  status: StapleStatus;
+}
+
+/** Every kitchen write returns this full view — replace local state with it. */
+export interface Kitchen {
+  items: KitchenItem[];
+  staples: Staple[];
+  updatedAt?: string;
+}
+
+export interface KitchenItemInput {
   name: string;
   qty?: number;
   unit?: string;
-  boughtAt?: string;
-  expiresAt?: string;
-  [key: string]: unknown;
+  level?: StockLevel;
+  storage?: Storage;
+  expiresOn?: string;
 }
 
-export interface Pantry {
-  id?: string;
-  items?: PantryItem[];
-  [key: string]: unknown;
+export function getKitchen() {
+  return apiFetch<Kitchen>("/data/kitchen");
 }
 
-export function getPantry() {
-  return apiFetch<Pantry>("/data/pantry");
-}
-
-export function confirmPantry(items: PantryItem[]) {
-  return apiFetch<Pantry>("/data/pantry/confirm", {
+/** Names matching a staple reset that staple to `ok` instead of adding an item. */
+export function addKitchenItems(items: KitchenItemInput[]) {
+  return apiFetch<Kitchen>("/data/kitchen/items", {
     method: "POST",
     body: { items },
   });
 }
 
-export interface ShoppingItem {
-  ingredientId?: string;
+/** Sending `qty` clears `level`; sending `level` clears `qty`/`unit`. */
+export function updateKitchenItem(
+  id: string,
+  patch: Partial<Omit<KitchenItemInput, "name">>,
+) {
+  return apiFetch<Kitchen>(`/data/kitchen/items/${id}`, {
+    method: "PUT",
+    body: patch,
+  });
+}
+
+export function deleteKitchenItem(id: string) {
+  return apiFetch<Kitchen>(`/data/kitchen/items/${id}`, { method: "DELETE" });
+}
+
+/** Full replace — always send every staple. */
+export function updateStaples(staples: { name: string; status: StapleStatus }[]) {
+  return apiFetch<Kitchen>("/data/kitchen/staples", {
+    method: "PUT",
+    body: { staples },
+  });
+}
+
+export interface ShoppingLine {
+  ingredientId: string;
   name: string;
+  category: string;
   qty?: number;
   unit?: string;
-  [key: string]: unknown;
+  /** Empty → a staple marked low/out. */
+  for: { date: string; slot: string; meal: string }[];
 }
 
-export interface ShoppingList {
-  date?: string;
-  shoppingList?: ShoppingItem[];
-  needed?: ShoppingItem[];
+export interface KitchenShoppingList {
+  days: number;
+  plannedDays: number;
+  shoppingList: ShoppingLine[];
 }
 
-export function getShoppingList(date?: string) {
-  return apiFetch<ShoppingList>(
-    `/data/shopping-list${date ? `?date=${date}` : ""}`,
-  );
+/** GET /data/kitchen/shopping-list — `days` 1–7, server default 3. */
+export function getKitchenShoppingList(days = 3) {
+  return apiFetch<KitchenShoppingList>(`/data/kitchen/shopping-list?days=${days}`);
 }
 
 /* ---------- Chat history ---------- */

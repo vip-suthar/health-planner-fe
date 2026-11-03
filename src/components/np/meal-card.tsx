@@ -31,6 +31,7 @@ function Eyebrow({
 export interface MealActions {
   onLog?: () => void;
   onSkip?: () => void;
+  onAddMissing?: () => void;
 }
 
 /** Top-right MEAL / ACTIVITY tag so the two kinds read apart at a glance. */
@@ -99,12 +100,27 @@ export function TaskCard({
           {item.time} · {item.label}
         </Eyebrow>
         {item.fromPantry && <StatusBadge tone="brand">FROM PANTRY</StatusBadge>}
+        {item.readiness?.ready && <StatusBadge tone="brand">READY TO COOK</StatusBadge>}
         <KindBadge kind={item.kind} />
       </div>
       <div className="mt-1.5 font-sans text-[15px] font-bold leading-[1.25] text-ink">
         {item.title}
       </div>
       {item.meta && <MonoMeta className="mt-1.5 block">{item.meta}</MonoMeta>}
+      {!item.readiness?.ready && !!item.readiness?.missing.length && (
+        <div className="mt-2 flex items-center gap-2 rounded-[10px] bg-caution-surface px-2.5 py-1.5">
+          <span className="min-w-0 flex-1 truncate font-sans text-[12px] font-medium text-caution">
+            Missing: {item.readiness.missing.join(", ")}
+          </span>
+          <button
+            type="button"
+            onClick={actions?.onAddMissing}
+            className="flex-none font-sans text-[12px] font-semibold text-brand active:opacity-70"
+          >
+            Add to kitchen
+          </button>
+        </div>
+      )}
       <div className="mt-3 flex gap-2">
         <Button onClick={actions?.onLog} className="h-9 flex-1 rounded-[10px] text-[13px]">
           <Check className="size-3.5" strokeWidth={2.6} />

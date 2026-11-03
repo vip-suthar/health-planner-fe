@@ -6,8 +6,6 @@
 import type {
   Ledger,
   MealNutrition,
-  PantryItem as ApiPantryItem,
-  ShoppingList,
   TaskLog,
   TodayPlan,
 } from "@/lib/api/data";
@@ -17,7 +15,6 @@ import type {
   MacroKey,
   TimelineItem,
 } from "@/lib/data";
-import type { PantryItem as ViewPantryItem } from "@/lib/data";
 
 const num = (v: unknown): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? v : undefined;
@@ -148,6 +145,7 @@ export function mapTimeline(plan: TodayPlan | null, now = new Date()): TimelineI
           title: m.name ?? "Meal",
           status: taskStatus(m.log, range, isToday, now),
           meta: nutritionMeta(m.nutrition),
+          readiness: m.readiness,
         },
       };
     }),
@@ -169,41 +167,4 @@ export function mapTimeline(plan: TodayPlan | null, now = new Date()): TimelineI
   ];
   if (!items.length) return null;
   return items.sort((a, b) => a.sort - b.sort).map((x) => x.item);
-}
-
-/* ---------- Kitchen: pantry + shopping ---------- */
-
-export function mapPantry(
-  items: ApiPantryItem[] | null,
-): ViewPantryItem[] | null {
-  if (!items?.length) return null;
-  return items.map((it) => {
-    const qty = [num(it.qty), it.unit].filter(Boolean).join(" ");
-    const expiringSoon =
-      it.expiresAt &&
-      new Date(it.expiresAt).getTime() - Date.now() < 3 * 86400000;
-    return {
-      name: it.name,
-      qty: qty || "—",
-      tag: expiringSoon
-        ? { text: "USE SOON", tone: "caution" as const }
-        : { text: "FRESH", tone: "brand" as const },
-    };
-  });
-}
-
-export function mapShoppingItems(
-  raw: ShoppingList | null,
-): { name: string; checked: boolean }[] | null {
-  const list = raw?.shoppingList ?? raw?.needed;
-  if (!list?.length) return null;
-  return list.map((it) => ({
-    name: [
-      it.name,
-      num(it.qty) ? `· ${it.qty}${it.unit ? ` ${it.unit}` : ""}` : "",
-    ]
-      .filter(Boolean)
-      .join(" "),
-    checked: false,
-  }));
 }

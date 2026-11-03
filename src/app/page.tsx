@@ -23,7 +23,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { coachNudge, forYou } from "@/lib/data";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
+import { toast } from "sonner";
 import { useUser } from "@/lib/api/use-api";
 import { data as dataApi, ApiError } from "@/lib/api";
 import { mapBudget, mapTimeline } from "@/lib/mappers";
@@ -45,6 +46,7 @@ export default function TodayPage() {
     error: planError,
   } = useSWR("/data/plans/today", () => dataApi.getPlanToday());
   const { data: user, isLoading: greetingLoading } = useUser();
+  const { mutate } = useSWRConfig();
 
   // 202 = generation queued (no plan yet); 422 = preferences never saved.
   // Both are cold-start states with their own screen — never a mock timeline.
@@ -66,6 +68,18 @@ export default function TodayPage() {
     return status ? { ...it, status } : it;
   });
   const ringPercent = budget ? 1 - budget.kcalLeft / (budget.kcalGoal || 1) : 0;
+
+  async function addMissing(names: string[]) {
+    try {
+      const kitchen = await dataApi.addKitchenItems(names.map((name) => ({ name })));
+      mutate("/data/kitchen", kitchen, { revalidate: false });
+      mutate("/data/plans/today");
+      mutate("/data/kitchen/shopping-list");
+      toast.success("Added to your kitchen");
+    } catch {
+      toast.error("Could not save that — try again.");
+    }
+  }
 
   return (
     <AppShell>
@@ -172,6 +186,7 @@ export default function TodayPage() {
                 actions={{
                   onLog: () => setLogTarget({ kind: item.kind, mode: "log", item }),
                   onSkip: () => setLogTarget({ kind: item.kind, mode: "skip", item }),
+                  onAddMissing: () => addMissing(item.readiness?.missing ?? []),
                 }}
               />
             </TimelineNode>

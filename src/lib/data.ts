@@ -28,6 +28,7 @@ export interface TimelineItem {
   status: ItemStatus;
   meta?: string; // "540 kcal · 32P · 18m"
   fromPantry?: boolean;
+  readiness?: { ready: boolean; missing: string[] };
   note?: string; // provisional copy
 }
 
@@ -276,37 +277,6 @@ export const safetyFlags = [
   { label: "Sodium cap · 1500mg", danger: false },
   { label: "Metformin flag", danger: false },
 ];
-
-/* ---------- Kitchen ---------- */
-export interface PantryItem {
-  name: string;
-  qty: string;
-  tag: { text: string; tone: "brand" | "caution" };
-}
-
-export const pantry: PantryItem[] = [
-  { name: "Chickpeas", qty: "2 cans", tag: { text: "FRESH", tone: "brand" } },
-  {
-    name: "Baby spinach",
-    qty: "200 g",
-    tag: { text: "USE IN 2D", tone: "caution" },
-  },
-  { name: "Greek yogurt", qty: "500 g", tag: { text: "FRESH", tone: "brand" } },
-  {
-    name: "Salmon fillet",
-    qty: "2 portions · frozen",
-    tag: { text: "FRESH", tone: "brand" },
-  },
-];
-
-export const shoppingList = {
-  aisle: "PRODUCE",
-  items: [
-    { name: "Lemons · 3", checked: true },
-    { name: "Cherry tomatoes · 1 pack", checked: false },
-    { name: "Cucumber · 1", checked: false },
-  ],
-};
 
 /* ---------- Coach ---------- */
 export const coachThread = {
